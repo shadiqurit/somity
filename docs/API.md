@@ -1,4 +1,29 @@
-# Phase 1 REST API
+# Phase 1 and Phase 2 REST API
+
+## Phase 2 finance endpoints
+
+All routes below require authentication, a changed initial password and an active `X-Society-Id`. See [PHASE2.md](PHASE2.md) for accounting and approval rules. Financial amounts must be decimal **strings** (for example `"1250.50"`), not JSON numbers. Dates use `YYYY-MM-DD`.
+
+| Method/path under `/api` | Permission | Purpose |
+| --- | --- | --- |
+| GET `/finance/accounts` | finance.read | Account metadata and posted balances. |
+| POST `/finance/accounts` | finance.settings | Create CASH/BANK account: code, name, kind, optional bankName/last four digits; bankName required for BANK. Starts at zero. |
+| GET `/finance/policy` | finance.read | Current policy; version 0 represents the default before first save. |
+| PUT `/finance/policy` | finance.settings | version, requiredApprovals (1/2), allowSelfApproval; stale versions return 409. |
+| GET `/finance/transactions` | finance.read | Paginated requests/history; page/pageSize (max 100), optional status/type/memberId/from/to. |
+| POST `/finance/transactions` | finance.write | Submit DEPOSIT/WITHDRAWAL: type, memberId, cashAccountId, amount, effectiveDate, optional reference/note. Requires `Idempotency-Key` header (16–80 letters/numbers/hyphens/underscores). |
+| GET `/finance/transactions/:id` | finance.read | Request, captured policy, decision history, original/reversal links and posted entries. |
+| POST `/finance/transactions/:id/decision` | finance.approve | decision APPROVE/REJECT, optional comment (reason of at least 5 characters required for REJECT). Final approval posts atomically. |
+| POST `/finance/transactions/:id/cancel` | finance.write | Requester cancels a pending request. No posted data is deleted. |
+| POST `/finance/transactions/:id/reversal` | finance.write | effectiveDate and reason in note (5–500 characters); requires a fresh `Idempotency-Key`. Requests full opposite posting after approval. |
+| GET `/finance/ledger` | finance.read | Paginated posted debit/credit lines; optional memberId/from/to. |
+| GET `/finance/summary` | finance.read | Savings in/out for optional from/to, approved savings through to, and count of all pending requests. |
+| GET `/finance/statements/:memberId` | finance.read | Approved movements, opening/closing/running balances; optional from/to/page/pageSize. Archived members' financial history remains available to staff. |
+| GET `/finance/statements/me` | profile.read | Identical statement restricted to the caller's linked member. Cannot select another member. |
+
+Submission keys are unique per society. Replaying the same normalized payload and requester returns its original transaction, including its current state; reusing a key for a different payload returns 409. Decision retries after completion return 409 without reposting. Insufficient member/cash funds return 409 and roll back the failed final decision. Another society's record/account returns 404, unauthorized operations 403, and malformed fields 422. There are no update/delete APIs for posted transactions or entries. The default policy requires a distinct authorized approver; Admin/Approver/Super Admin can decide, Accountant can submit, and only Admin/Super Admin manage accounts/policy.
+
+## Phase 1 endpoints
 
 Base path `/api`. Business endpoints require `X-Society-Id` for an active society the caller can access. `/auth/*` and the platform `/societies` routes do not require this header, although `/auth/me` and refresh use it to resolve the selected society. Roles/permissions and member ownership are resolved within that society on every request. Responses are JSON except authenticated document downloads. Authentication uses a 15-minute Bearer JWT kept in browser memory and a rotating 7-day opaque refresh token in a HttpOnly, SameSite=Strict cookie scoped to `/api/auth`. Production cookies require HTTPS. Auth POSTs require an `Origin` exactly matching `FRONTEND_ORIGIN`, including command-line clients. Cross-origin frontend deployments must be same-site for the strict refresh cookie; prefer a same-origin `/api` reverse proxy.
 
@@ -68,7 +93,7 @@ List query: `page=1&pageSize=10&search=...&status=ACTIVE&sort=createdAt&directio
 | Approver | Yes | Yes | No | No | No | No |
 | Member | No | No | No | No | No | Yes |
 
-Accountant and Approver acquire financial permissions only when those modules are implemented. No public registration or browser-selected role assignment exists. Superadmin manages societies and creates each society’s first Admin. Tenant Admin and Superadmin can create staff and member logins within the selected society; only the seed creates the initial platform Superadmin. New accounts must change temporary passwords before accessing business data.
+Accountant can read finance and submit requests. Approver can read finance and approve/reject requests. Admin and Super Admin also manage accounts and approval policy. Members can read only their own statement. No public registration or browser-selected role assignment exists. Superadmin manages societies and creates each society’s first Admin. Tenant Admin and Superadmin can create staff and member logins within the selected society; only the seed creates the initial platform Superadmin. New accounts must change temporary passwords before accessing business data.
 
 ## Multiple-society contract
 

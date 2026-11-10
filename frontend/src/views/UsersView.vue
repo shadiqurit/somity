@@ -19,6 +19,6 @@ onMounted(() => load());
   <div v-if="notice" class="alert success" role="status">{{ notice }}</div>
   <div v-if="error" class="alert error" role="alert">{{ error }} <AppButton variant="ghost" @click="load()">Retry</AppButton></div>
   <section class="panel directory"><div class="directory-heading"><h2><ShieldCheck :size="21" /> User accounts <span class="count-pill">{{ total }}</span></h2><span class="muted small-text">Access for every role</span></div><AppTable :rows="rows" :columns="columns" :page="page" :pages="pages" :total="total" :loading="loading" @page="load"><template #cell-roles="{ row }">{{ row.roles.map(r => r.role.name).join(', ') }}</template><template #cell-isActive="{ row }"><StatusBadge :status="row.isActive ? 'ACTIVE' : 'INACTIVE'" /></template></AppTable></section>
-  <p class="under-table-note">Create member accounts from their member profile. Accountant and Approver roles have read access in Phase 1.</p>
+  <p class="under-table-note">Create member accounts from their member profile. Accountants can submit financial requests; Approvers can approve or reject them. Both can view financial records within this society.</p>
   <AppModal :open="open" title="Add staff account" description="Create a secure login for someone on your team." :busy="busy" @close="open = false"><UserEntryForm v-if="open" @busy="busy = $event" @cancel="open = false" @saved="saved" /></AppModal>
 </template>

@@ -6,5 +6,5 @@ export async function summary(societyId: string) {
     db.member.count({ where: { societyId, archivedAt: null, userId: { not: null } } }),
     db.member.findMany({ where: { societyId, archivedAt: null }, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }], take: 5, select: { id: true, memberNo: true, fullName: true, status: true, joinedAt: true } }),
   ]);
-  return { total, active, linked, inactive: total - active, recent, currency: 'BDT', financialModulesAvailable: false };
+  return { total, active, linked, inactive: total - active, recent, currency: 'BDT', financialModulesAvailable: true };
 }

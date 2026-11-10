@@ -8,7 +8,7 @@ The application now manages multiple societies in one MySQL database. Business r
 2. Select **Add society**, enter its name/code/contact details and the first administrator's name, unique login email and temporary password.
 3. Open that society from the list or choose it using **Current society** in the sidebar.
 4. Its Admin uses **Team & access** to create Admin, Accountant or Approver accounts. Member logins are created from member profiles. These accounts receive access to that society only.
-5. Every new login must change its temporary password. Members can view their own profile only; Approvers have read access until financial approval modules are implemented.
+5. Every new login must change its temporary password. Members can view their own profile and approved savings statement. Approvers can read financial records and decide approval requests.
 
 Only platform Super Admin can create/edit societies, enable/disable them or open societies without being a member. Ordinary society users cannot discover or select unrelated societies. Disabling a society blocks its business APIs and its users' access without deleting records. A Super Admin can reactivate it from the platform list.
 
@@ -68,4 +68,4 @@ The initial society can be renamed through **Societies → Edit**. Existing memb
 
 Tests cover two societies with identical profile contact emails/member numbers; scoped dashboards, user lists and role creation; forged headers; cross-society reads/writes and photos; platform escalation; composite FK rejection; one identity with ADMIN in A and MEMBER in B; disabled societies; archival preserving other memberships; and browser creation/switching with distinct Admin/Approver logins.
 
-Future accounts, transactions, entries, approvals, loans, investments, expenses, profits, reports and backups must carry societyId. Use composite foreign keys for all business relationships and society-scoped idempotency keys, account codes and transaction numbers. Tenant context must remain mandatory in posting/reporting/export/backup services. Authorization isolation tests must accompany each new module. Financial modules and per-society automated backups remain outside the current Phase 1 implementation.
+Phase 2 accounts, transactions, entries and approvals carry societyId, with composite tenant foreign keys and scoped permissions; see [PHASE2.md](PHASE2.md). Future loans, investments, expenses, profits, reports and backups must maintain this boundary. Use composite foreign keys for all business relationships and society-scoped idempotency keys, account codes and transaction numbers. Tenant context must remain mandatory in posting/reporting/export/backup services. Authorization isolation tests must accompany each new module. Loans/investments and per-society automated backups remain later increments.

@@ -1,2 +1,2 @@
 import { defineConfig } from 'vitest/config';
-export default defineConfig({ test: { env: { NODE_ENV: 'test', JWT_ACCESS_SECRET: 'test-only-secret-at-least-thirty-two-characters', DATABASE_URL: 'mysql://unused:unused@127.0.0.1:3307/unused_test', FRONTEND_ORIGIN: 'http://localhost:5173', STORAGE_DIR: '../.local/test-uploads' }, fileParallelism: false, testTimeout: 15000, hookTimeout: 30000 } });
+export default defineConfig({ test: { env: { NODE_ENV: 'test', JWT_ACCESS_SECRET: 'test-only-secret-at-least-thirty-two-characters', DATABASE_URL: 'mysql://unused:unused@127.0.0.1:3307/unused_test', FRONTEND_ORIGIN: 'http://localhost:5173', STORAGE_DIR: '../test-results/private-storage' }, fileParallelism: false, testTimeout: 15000, hookTimeout: 30000 } });

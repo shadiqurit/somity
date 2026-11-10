@@ -14,6 +14,7 @@ import { memberRouter } from './modules/members/member.routes.js';
 import { userRouter } from './modules/users/user.routes.js';
 import { uploadRouter } from './modules/uploads/upload.routes.js';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes.js';
+import { financeRouter } from './modules/finance/finance.routes.js';
 export const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', env.TRUST_PROXY);
@@ -21,7 +22,7 @@ app.use(helmet(), cors({ origin: env.FRONTEND_ORIGIN, credentials: true }), expr
 app.use((_req, res, next) => { res.set('X-Request-Id', randomUUID()); res.set('Cache-Control', 'no-store'); next(); });
 app.get('/api/health', async (_req, res) => {
   await db.$queryRaw`SELECT 1`;
-  res.json({ status: 'ok', version: '1.0.0', capabilities: { memberPhotoRemoval: true, supersededPhotoCleanup: true, multiSociety: true } });
+  res.json({ status: 'ok', version: '1.1.0', capabilities: { memberPhotoRemoval: true, supersededPhotoCleanup: true, multiSociety: true, memberFinance: true } });
 });
 app.use('/api', rateLimit({ windowMs: 60000, limit: 300, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: { message: 'Too many requests. Please wait a minute' } } }));
 app.use('/api/auth', authRouter);
@@ -32,6 +33,7 @@ app.get('/api/roles', requirePermission('users.manage'), async (_req, res) => re
 app.use('/api/members', memberRouter);
 app.use('/api/users', userRouter);
 app.use('/api/dashboard', dashboardRouter);
+app.use('/api/finance', financeRouter);
 app.use('/api', uploadRouter);
 app.use((_req, res) => res.status(404).json({ error: { message: 'Endpoint not found' } }));
 app.use(errorHandler);

@@ -33,7 +33,7 @@ test.afterAll(async () => {
   await db.memberDocument.deleteMany({ where: { memberId } }); await db.nominee.deleteMany({ where: { memberId } });
   if (memberId) await db.member.deleteMany({ where: { id: memberId } });
   await db.user.deleteMany({ where: { id: { in: ids } } });
-  for (const doc of docs) await unlink(resolve('.local/e2e-uploads', doc.storageKey)).catch(() => {});
+  for (const doc of docs) await unlink(resolve('test-results/e2e-private-storage', doc.storageKey)).catch(() => {});
   await db.society.delete({ where: { id: societyId } });
   await db.$disconnect();
 });
@@ -89,7 +89,7 @@ test('complete admin and member workflows on desktop and mobile', async ({ page 
   await editDialog.getByLabel('Member photo', { exact: true }).setInputFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: replacementPhoto });
   await page.getByRole('button', { name: 'Save changes' }).click(); await expect(page.getByRole('heading', { name: `Updated Browser ${tag}` })).toBeVisible();
   expect(await db.memberDocument.findUnique({ where: { id: initialPhoto.id } })).toBeNull();
-  await expect(access(resolve('.local/e2e-uploads', initialPhoto.storageKey))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(access(resolve('test-results/e2e-private-storage', initialPhoto.storageKey))).rejects.toMatchObject({ code: 'ENOENT' });
   const replacement = await db.memberDocument.findFirstOrThrow({ where: { memberId, kind: 'PHOTO' } });
   await page.getByRole('button', { name: 'Edit profile' }).click();
   await editDialog.getByRole('button', { name: 'Remove photo', exact: true }).click();
@@ -105,7 +105,7 @@ test('complete admin and member workflows on desktop and mobile', async ({ page 
   await editDialog.getByRole('button', { name: 'Save changes' }).click();
   await expect(editDialog).not.toBeVisible(); await expect(page.locator('.profile-hero img')).toHaveCount(0);
   expect(await db.memberDocument.findUnique({ where: { id: replacement.id } })).toBeNull();
-  await expect(access(resolve('.local/e2e-uploads', replacement.storageKey))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(access(resolve('test-results/e2e-private-storage', replacement.storageKey))).rejects.toMatchObject({ code: 'ENOENT' });
   await page.getByLabel('Member photo', { exact: true }).setInputFiles({ name: 'profile.png', mimeType: 'image/png', buffer: photo });
   await expect(page.locator('.profile-hero img')).toBeVisible();
   await page.getByRole('button', { name: 'Remove photo', exact: true }).click();

@@ -2,7 +2,7 @@
 
 ## Scope
 
-Phase 1 implements identity, permissions, members, nominees, private photos, audit history and settings. Financial tables below are a design contract for later migrations; they are deliberately not deployed or exposed as working features yet. The installation supports multiple societies with independent role assignments and society-scoped business data. See [MULTI_SOCIETY.md](MULTI_SOCIETY.md) for the implemented tenant boundary, migration and administration workflow.
+Phase 1 implements identity, permissions, members, nominees, private photos, audit history and settings. Phase 2 implements accounts, transactions, transaction_entries, approval_policies and approval_steps for member savings; see [PHASE2.md](PHASE2.md) for the current schema, invariants and scope. The broader financial tables below remain a design contract for later increments. The installation supports multiple societies with independent role assignments and society-scoped business data. See [MULTI_SOCIETY.md](MULTI_SOCIETY.md) for the implemented tenant boundary, migration and administration workflow.
 
 ## Implemented tables
 

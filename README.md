@@ -1,10 +1,10 @@
-# Somity — Society Management, Phase 1
+# Somity — Society Management, Phase 2
 
 Separate Vue 3 / Vite / TypeScript frontend and Express / TypeScript / MySQL 8 / Prisma backend, following `SPEC.md`. This phase delivers authentication, permissions, an admin dashboard, member CRUD with nominees/private photos, search/pagination, a read-only member dashboard, migrations and superadmin provisioning.
 
 Multiple societies are supported, each with its own Admin, Approver, Accountant and Members. Super Admin manages the platform; the sidebar society selector scopes all business screens and APIs. Existing records migrate into the first society without changing profile URLs. See [the multi-society guide](docs/MULTI_SOCIETY.md) for setup, isolation and migration details.
 
-Financial transactions, approvals, loan/investment reports and encrypted offline backups are future phases. Their extensible database plan is in [docs/DATABASE_DESIGN.md](docs/DATABASE_DESIGN.md). No financial records or balances are mocked.
+Phase 2 adds member deposits/withdrawals, cash and bank accounts, one- or two-person approvals, a balanced ledger, approved reversals, and private member statements. See [the Phase 2 guide](docs/PHASE2.md) for workflow, migration, permissions and tested guarantees. Loans, investments, profit distribution, income/expenses, PDF/Excel export and automated encrypted backups remain later increments. No financial records or balances are mocked.
 
 ## Setup
 
@@ -48,7 +48,7 @@ backend/
 docs/                                  API contract and future database design
 ```
 
-Authentication keeps access tokens in memory and refresh tokens in a private cookie. Authorization is enforced on API routes and record ownership, including photo downloads. Member archives retain records and disable login. All member mutations and successful login/password/staff events are audited; secrets are excluded. Files stay outside the public web root and are decoded/reencoded before storage. New users must change their initial password before business access. Society Admin can create staff/member logins in their own society; platform Super Admin can create and manage societies. Tenant accounts cannot create platform Super Admins. Member dashboards allow viewing only.
+Authentication keeps access tokens in memory and refresh tokens in a private cookie. Authorization is enforced on API routes and record ownership, including photo downloads. Member archives retain records and disable login. All member mutations and successful login/password/staff events are audited; secrets are excluded. Files stay outside the public web root and are decoded/reencoded before storage. New users must change their initial password before business access. Society Admin can create staff/member logins in their own society; platform Super Admin can create and manage societies. Tenant accounts cannot create platform Super Admins. Member dashboards allow viewing their own profile and approved savings statement only.
 
 Reusable controls include AppForm, AppInput, AppSelect, AppDatePicker, FileUploader, AppTable (sort/pagination), AppModal, ConfirmDialog, StatusBadge, SummaryCard, LoadingState and AppButton. Most interface text is English; the locale composable includes Bangla navigation and core dashboard labels as a foundation for complete translation. Bangla input is supported throughout.
 

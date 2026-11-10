@@ -111,12 +111,6 @@ Keep business logic separate from controllers.
 - Maintain complete audit history.
 - Prevent users from approving their own requests when segregation of duties is required.
 
-### Investment Documents
-- Upload scanned documents, PDF, JPG, PNG
-- Attach multiple documents to investments
-- Secure document storage
-- Admin preview and download
-- Permission-based document access
 
 ### Reports
 - Member statements

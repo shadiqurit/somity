@@ -5,6 +5,27 @@ import { memberSchema, sharesTotal100 } from '../src/modules/members/member.vali
 import { storedFilePath, storageRoot } from '../src/services/file-cleanup.js';
 import { resolve } from 'node:path';
 import { databaseConnectionOptions } from '../src/config/database.js';
+import { balancedLines } from '../src/modules/finance/finance.service.js';
+import { moneySchema } from '../src/modules/finance/finance.validator.js';
+import { Prisma } from '@prisma/client';
+
+describe('financial precision', () => {
+  it('rejects floats, zero, negative, exponent and excess precision inputs', () => {
+    for (const amount of [0.1, '0', '-1', '1e3', '01.00', '1.001', 'NaN', 'abc', '1,000', '', null, '1000000000000000000']) expect(moneySchema.safeParse(amount).success).toBe(false);
+    expect(moneySchema.safeParse('999999999999999999.99').success).toBe(true);
+  });
+  it('preserves exact cents and balances deposits and withdrawals', () => {
+    const amount = new Prisma.Decimal('999999999999999999.99');
+    expect(amount.plus('0.02').toFixed(2)).toBe('1000000000000000000.01');
+    for (const increasesSavings of [true, false]) {
+      const lines = balancedLines(amount, 'cash', 'savings', increasesSavings);
+      expect(lines.reduce((sum, line) => sum.plus(line.debit), new Prisma.Decimal(0)).toFixed(2)).toBe(amount.toFixed(2));
+      expect(lines.reduce((sum, line) => sum.plus(line.credit), new Prisma.Decimal(0)).toFixed(2)).toBe(amount.toFixed(2));
+      expect(lines.every(line => line.debit.isZero() !== line.credit.isZero())).toBe(true);
+    }
+    expect(() => balancedLines(new Prisma.Decimal('0.001'), 'cash', 'savings', true)).toThrow();
+  });
+});
 
 describe('database authentication', () => {
   it('allows MySQL RSA key retrieval only for loopback connections', () => {

@@ -13,7 +13,7 @@
     "db:dev": "prisma migrate dev --config prisma7.config.ts",
     "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run tests/unit.test.ts",
-    "test:integration": "vitest run tests/integration.test.ts tests/tenancy.test.ts"
+    "test:integration": "vitest run tests/integration.test.ts tests/tenancy.test.ts tests/finance.test.ts"
   },
   "dependencies": {
     "@prisma/adapter-mariadb": "7.10.1",

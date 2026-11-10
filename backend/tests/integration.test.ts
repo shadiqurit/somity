@@ -204,6 +204,6 @@ describe('Phase 1 API with MySQL', () => {
     await request(app).post('/api/auth/logout').set({ Origin: origin, Cookie: cookies(login) }).expect(204);
     await request(app).get('/api/auth/me').set(auth(login.body.accessToken)).expect(401);
     const health = await request(app).get('/api/health').expect(200);
-    expect(health.body.capabilities).toEqual({ memberPhotoRemoval: true, supersededPhotoCleanup: true, multiSociety: true });
+    expect(health.body.capabilities).toEqual({ memberPhotoRemoval: true, supersededPhotoCleanup: true, multiSociety: true, memberFinance: true });
   });
 });
