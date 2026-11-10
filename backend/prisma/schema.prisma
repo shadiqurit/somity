@@ -31,6 +31,8 @@ model User {
   memberships        SocietyMembership[]
   sessions           RefreshSession[]
   auditLogs          AuditLog[]
+  financialRequests  FinancialTransaction[]
+  approvalDecisions  ApprovalDecision[]
 
   @@map("users")
 }
@@ -111,6 +113,8 @@ model Member {
   updatedAt   DateTime         @updatedAt @db.DateTime(3)
   nominees    Nominee[]
   documents   MemberDocument[]
+  transactions FinancialTransaction[]
+  ledgerEntries LedgerEntry[]
 
   @@unique([societyId, id])
   @@unique([societyId, memberNo])
@@ -211,6 +215,11 @@ model Society {
   members     Member[]
   auditLogs   AuditLog[]
   settings    SystemSetting[]
+  accounts    LedgerAccount[]
+  transactions FinancialTransaction[]
+  ledgerEntries LedgerEntry[]
+  approvalDecisions ApprovalDecision[]
+  financePolicy FinancePolicy?
 
   @@index([isActive, name])
   @@map("societies")
@@ -234,4 +243,138 @@ model SocietyMembership {
   @@index([societyId, roleId, isActive])
   @@index([roleId])
   @@map("society_memberships")
+}
+
+enum AccountKind {
+  CASH
+  BANK
+  MEMBER_SAVINGS
+}
+
+enum FinancialTransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  REVERSAL
+}
+
+enum FinancialTransactionStatus {
+  PENDING
+  POSTED
+  REJECTED
+  CANCELLED
+}
+
+enum ApprovalDecisionType {
+  APPROVE
+  REJECT
+}
+
+model LedgerAccount {
+  id String @id @default(cuid()) @db.VarChar(30)
+  societyId String @db.VarChar(30)
+  code String @db.VarChar(40)
+  name String @db.VarChar(120)
+  kind AccountKind
+  bankName String? @db.VarChar(120)
+  accountNumberLast4 String? @db.Char(4)
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+  society Society @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  transactions FinancialTransaction[]
+  entries LedgerEntry[]
+
+  @@unique([societyId, id])
+  @@unique([societyId, code])
+  @@map("accounts")
+}
+
+model FinancePolicy {
+  societyId String @id @db.VarChar(30)
+  requiredApprovals Int @default(1)
+  allowSelfApproval Boolean @default(false)
+  version Int @default(1)
+  updatedAt DateTime @updatedAt @db.DateTime(3)
+  society Society @relation(fields: [societyId], references: [id], onDelete: Restrict)
+
+  @@map("approval_policies")
+}
+
+model FinancialTransaction {
+  id String @id @default(cuid()) @db.VarChar(30)
+  societyId String @db.VarChar(30)
+  transactionNo String @db.VarChar(40)
+  type FinancialTransactionType
+  status FinancialTransactionStatus @default(PENDING)
+  memberId String @db.VarChar(30)
+  cashAccountId String @db.VarChar(30)
+  amount Decimal @db.Decimal(20, 2)
+  effectiveDate DateTime @db.Date
+  reference String @db.VarChar(120)
+  note String @db.VarChar(500)
+  createdById String @db.VarChar(30)
+  idempotencyKey String @db.VarChar(80)
+  requestHash String @db.Char(64)
+  policyVersion Int
+  requiredApprovals Int
+  allowSelfApproval Boolean
+  reversalOfId String? @db.VarChar(30)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+  postedAt DateTime? @db.DateTime(3)
+  society Society @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  member Member @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict)
+  cashAccount LedgerAccount @relation(fields: [societyId, cashAccountId], references: [societyId, id], onDelete: Restrict)
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  reversalOf FinancialTransaction? @relation("TransactionReversal", fields: [societyId, reversalOfId], references: [societyId, id], onDelete: Restrict, onUpdate: Restrict)
+  reversals FinancialTransaction[] @relation("TransactionReversal")
+  entries LedgerEntry[]
+  decisions ApprovalDecision[]
+
+  @@unique([societyId, id])
+  @@unique([societyId, transactionNo])
+  @@unique([societyId, idempotencyKey])
+  @@index([societyId, status, createdAt])
+  @@index([societyId, memberId, effectiveDate, status])
+  @@index([societyId, reversalOfId])
+  @@index([societyId, cashAccountId])
+  @@index([createdById])
+  @@map("transactions")
+}
+
+model LedgerEntry {
+  id String @id @default(cuid()) @db.VarChar(30)
+  societyId String @db.VarChar(30)
+  transactionId String @db.VarChar(30)
+  line Int
+  accountId String @db.VarChar(30)
+  memberId String @db.VarChar(30)
+  debit Decimal @db.Decimal(20, 2)
+  credit Decimal @db.Decimal(20, 2)
+  society Society @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  transaction FinancialTransaction @relation(fields: [societyId, transactionId], references: [societyId, id], onDelete: Restrict)
+  account LedgerAccount @relation(fields: [societyId, accountId], references: [societyId, id], onDelete: Restrict)
+  member Member @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict)
+
+  @@unique([societyId, transactionId, line])
+  @@index([societyId, accountId])
+  @@index([societyId, memberId])
+  @@map("transaction_entries")
+}
+
+model ApprovalDecision {
+  id String @id @default(cuid()) @db.VarChar(30)
+  societyId String @db.VarChar(30)
+  transactionId String @db.VarChar(30)
+  step Int
+  approverId String @db.VarChar(30)
+  decision ApprovalDecisionType
+  comment String @db.VarChar(500)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+  society Society @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  transaction FinancialTransaction @relation(fields: [societyId, transactionId], references: [societyId, id], onDelete: Restrict)
+  approver User @relation(fields: [approverId], references: [id], onDelete: Restrict)
+
+  @@unique([societyId, transactionId, step])
+  @@unique([societyId, transactionId, approverId])
+  @@index([approverId])
+  @@map("approval_steps")
 }
