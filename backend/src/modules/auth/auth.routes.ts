@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import { rateLimit } from 'express-rate-limit';
+import { authenticate } from '../../middleware/auth.js';
+import * as controller from './auth.controller.js';
+export const authRouter = Router();
+const loginLimiter = rateLimit({ windowMs: 15 * 60000, limit: 10, skipSuccessfulRequests: true, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: { message: 'Too many sign-in attempts. Try again in 15 minutes' } } });
+authRouter.post('/login', controller.verifyOrigin, loginLimiter, controller.login);
+authRouter.post('/refresh', controller.verifyOrigin, controller.refresh);
+authRouter.post('/logout', controller.verifyOrigin, controller.logout);
+authRouter.get('/me', authenticate, (req, res) => res.json(req.user));
+authRouter.post('/password', controller.verifyOrigin, authenticate, loginLimiter, controller.changePassword);

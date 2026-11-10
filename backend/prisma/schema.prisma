@@ -1,0 +1,237 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum DocumentKind {
+  PHOTO
+  IDENTITY
+  OTHER
+}
+
+model User {
+  id                 String           @id @default(cuid()) @db.VarChar(30)
+  email              String           @unique @db.VarChar(191)
+  name               String           @db.VarChar(120)
+  passwordHash       String           @db.VarChar(255)
+  isActive           Boolean          @default(true)
+  mustChangePassword Boolean          @default(true)
+  createdAt          DateTime         @default(now()) @db.DateTime(3)
+  updatedAt          DateTime         @updatedAt @db.DateTime(3)
+  roles              UserRole[]
+  memberships        SocietyMembership[]
+  sessions           RefreshSession[]
+  auditLogs          AuditLog[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String           @id @default(cuid()) @db.VarChar(30)
+  code        String           @unique @db.VarChar(40)
+  name        String           @db.VarChar(80)
+  users       UserRole[]
+  memberships SocietyMembership[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id    String           @id @default(cuid()) @db.VarChar(30)
+  code  String           @unique @db.VarChar(80)
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model UserRole {
+  userId String @db.VarChar(30)
+  roleId String @db.VarChar(30)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@id([userId, roleId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+model RolePermission {
+  roleId       String     @db.VarChar(30)
+  permissionId String     @db.VarChar(30)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model RefreshSession {
+  id        String    @id @default(cuid()) @db.VarChar(30)
+  userId    String    @db.VarChar(30)
+  tokenHash String    @unique @db.Char(64)
+  familyId  String    @db.VarChar(36)
+  expiresAt DateTime  @db.DateTime(3)
+  revokedAt DateTime? @db.DateTime(3)
+  createdAt DateTime  @default(now()) @db.DateTime(3)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_sessions")
+}
+
+model Member {
+  societyId   String           @db.VarChar(30)
+  society     Society          @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  membership  SocietyMembership? @relation(fields: [societyId, userId], references: [societyId, userId], onDelete: Restrict)
+  id          String           @id @default(cuid()) @db.VarChar(30)
+  memberNo    String @db.VarChar(32)
+  userId      String? @db.VarChar(30)
+  fullName    String           @db.VarChar(120)
+  phone       String           @db.VarChar(25)
+  email       String? @db.VarChar(191)
+  address     String           @db.VarChar(500)
+  joinedAt    DateTime         @db.Date
+  status      MemberStatus     @default(ACTIVE)
+  version     Int              @default(1)
+  archivedAt  DateTime?        @db.DateTime(3)
+  createdAt   DateTime         @default(now()) @db.DateTime(3)
+  updatedAt   DateTime         @updatedAt @db.DateTime(3)
+  nominees    Nominee[]
+  documents   MemberDocument[]
+
+  @@unique([societyId, id])
+  @@unique([societyId, memberNo])
+  @@unique([societyId, email])
+  @@unique([societyId, userId])
+  @@index([userId])
+  @@index([societyId, archivedAt, createdAt, id])
+  @@index([societyId, archivedAt, status])
+  @@index([societyId, fullName])
+  @@index([societyId, phone])
+  @@map("members")
+}
+
+model Nominee {
+  societyId    String @db.VarChar(30)
+  id           String @id @default(cuid()) @db.VarChar(30)
+  memberId     String @db.VarChar(30)
+  fullName     String @db.VarChar(120)
+  relationship String @db.VarChar(80)
+  phone        String @db.VarChar(25)
+  address      String @db.VarChar(500)
+  sharePercent Decimal @db.Decimal(5, 2)
+  member       Member @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict)
+
+  @@index([societyId, memberId])
+  @@map("nominees")
+}
+
+model MemberDocument {
+  societyId    String       @db.VarChar(30)
+  id           String       @id @default(cuid()) @db.VarChar(30)
+  memberId     String       @db.VarChar(30)
+  kind         DocumentKind
+  storageKey   String       @unique @db.VarChar(191)
+  originalName String       @db.VarChar(191)
+  mimeType     String       @db.VarChar(80)
+  sizeBytes    Int
+  createdAt    DateTime     @default(now()) @db.DateTime(3)
+  member       Member       @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict)
+
+  @@index([societyId, memberId, kind, createdAt])
+  @@map("member_documents")
+}
+
+model AuditLog {
+  societyId  String?  @db.VarChar(30)
+  society    Society? @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  actorId    String?  @db.VarChar(30)
+  action     String   @db.VarChar(80)
+  entityType String   @db.VarChar(60)
+  entityId   String   @db.VarChar(64)
+  changes    Json?
+  createdAt  DateTime @default(now()) @db.DateTime(3)
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([societyId, entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  societyId String   @db.VarChar(30)
+  society   Society  @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  key       String @db.VarChar(100)
+  value     Json
+  updatedAt DateTime @updatedAt @db.DateTime(3)
+
+  @@id([societyId, key])
+  @@map("system_settings")
+}
+
+// Durable cleanup jobs let filesystem deletions retry after a committed DB change.
+model FileDeletion {
+  storageKey String   @id @db.VarChar(191)
+  createdAt  DateTime @default(now()) @db.DateTime(3)
+  attempts   Int      @default(0)
+
+  @@index([createdAt])
+  @@map("file_deletions")
+}
+
+model Society {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  code        String   @unique @db.VarChar(40)
+  name        String   @db.VarChar(120)
+  email       String?  @db.VarChar(191)
+  phone       String?  @db.VarChar(25)
+  address     String?  @db.VarChar(500)
+  currency    String   @default("BDT") @db.Char(3)
+  timezone    String   @default("Asia/Dhaka") @db.VarChar(60)
+  isActive    Boolean  @default(true)
+  version     Int      @default(1)
+  createdAt   DateTime @default(now()) @db.DateTime(3)
+  updatedAt   DateTime @updatedAt @db.DateTime(3)
+  memberships SocietyMembership[]
+  members     Member[]
+  auditLogs   AuditLog[]
+  settings    SystemSetting[]
+
+  @@index([isActive, name])
+  @@map("societies")
+}
+
+model SocietyMembership {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  societyId String   @db.VarChar(30)
+  userId    String   @db.VarChar(30)
+  roleId    String   @db.VarChar(30)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.DateTime(3)
+  updatedAt DateTime @updatedAt @db.DateTime(3)
+  society   Society  @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  member    Member?
+
+  @@unique([societyId, userId])
+  @@index([userId, isActive])
+  @@index([societyId, roleId, isActive])
+  @@index([roleId])
+  @@map("society_memberships")
+}

@@ -1,0 +1,11 @@
+import { Router } from 'express';
+import { requirePermission } from '../../middleware/auth.js';
+import * as controller from './member.controller.js';
+export const memberRouter = Router();
+memberRouter.get('/me', requirePermission('profile.read'), controller.me);
+memberRouter.get('/', requirePermission('members.read'), controller.list);
+memberRouter.post('/', requirePermission('members.write'), controller.create);
+memberRouter.get('/:id', controller.get);
+memberRouter.put('/:id', requirePermission('members.write'), controller.update);
+memberRouter.delete('/:id', requirePermission('members.archive'), controller.archive);
+memberRouter.post('/:id/login', requirePermission('users.manage'), controller.createLogin);
