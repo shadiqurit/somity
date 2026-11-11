@@ -18,6 +18,12 @@
 .finance-detail-actions { margin-top: 22px; }
 .finance-detail-actions + .app-form, .finance-decisions + .app-form, .finance-decisions + .table-shell + .app-form { margin-top: 24px; }
 .finance-statement { margin-top: 26px; }
+.sidebar { overflow-y: auto; }
+.sidebar-note { margin-top: 24px; }
+.product-report { margin-top: 0; }
+.product-report td { white-space: nowrap; }
+.profile-grid ~ .product-report { margin-top: 26px; }
+.product-history-heading { margin: 24px 0 14px; }
 .statement-summary { padding: 0 20px; }
 .badge.pending { color: #936d29; background: #fff5df; }
 .badge.posted { color: #367651; background: #eaf5ed; }

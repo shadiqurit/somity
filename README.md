@@ -4,7 +4,7 @@ Separate Vue 3 / Vite / TypeScript frontend and Express / TypeScript / MySQL 8 /
 
 Multiple societies are supported, each with its own Admin, Approver, Accountant and Members. Super Admin manages the platform; the sidebar society selector scopes all business screens and APIs. Existing records migrate into the first society without changing profile URLs. See [the multi-society guide](docs/MULTI_SOCIETY.md) for setup, isolation and migration details.
 
-Phase 2 adds member deposits/withdrawals, cash and bank accounts, one- or two-person approvals, a balanced ledger, approved reversals, and private member statements. See [the Phase 2 guide](docs/PHASE2.md) for workflow, migration, permissions and tested guarantees. Loans, investments, profit distribution, income/expenses, PDF/Excel export and automated encrypted backups remain later increments. No financial records or balances are mocked.
+Phase 2 adds member deposits/withdrawals, cash and bank accounts, one- or two-person approvals, a balanced ledger, approved reversals, and private member statements. See [the Phase 2 guide](docs/PHASE2.md) for workflow, migration, permissions and tested guarantees. Loans with monthly principal installments and repayments, investments with principal/profit returns, society expenses and cash/bank transfers are now implemented; see [the financial modules guide](docs/FINANCIAL_MODULES.md). Automatic interest/profit allocation, PDF/Excel export and automated encrypted backups remain separate work. No financial records or balances are mocked.
 
 ## Setup
 

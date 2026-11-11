@@ -8,6 +8,16 @@ import { databaseConnectionOptions } from '../src/config/database.js';
 import { balancedLines } from '../src/modules/finance/finance.service.js';
 import { moneySchema } from '../src/modules/finance/finance.validator.js';
 import { Prisma } from '@prisma/client';
+import { principalSchedule } from '../src/modules/finance/finance.posting.js';
+
+describe('loan installments', () => {
+  it('keeps exact principal and clamps monthly due dates at month end', () => {
+    const rows = principalSchedule('100.01', 3, '2027-01-31');
+    expect(rows.map(r => r.amount)).toEqual(['33.33', '33.33', '33.35']);
+    expect(rows.map(r => r.dueDate)).toEqual(['2027-01-31', '2027-02-28', '2027-03-31']);
+    expect(() => principalSchedule('0.01', 2, '2027-01-31')).toThrow();
+  });
+});
 
 describe('financial precision', () => {
   it('rejects floats, zero, negative, exponent and excess precision inputs', () => {

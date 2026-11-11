@@ -2,6 +2,8 @@
 
 ## Phase 2 finance endpoints
 
+Loan/investment/expense/transfer entry types and report routes are documented in [FINANCIAL_MODULES.md](FINANCIAL_MODULES.md). Society transactions can have `member: null`; clients must handle this when displaying finance history and ledger lines.
+
 All routes below require authentication, a changed initial password and an active `X-Society-Id`. See [PHASE2.md](PHASE2.md) for accounting and approval rules. Financial amounts must be decimal **strings** (for example `"1250.50"`), not JSON numbers. Dates use `YYYY-MM-DD`.
 
 | Method/path under `/api` | Permission | Purpose |

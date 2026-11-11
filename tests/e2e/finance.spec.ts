@@ -34,6 +34,9 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await db.ledgerEntry.deleteMany({ where: { societyId } });
   await db.approvalDecision.deleteMany({ where: { societyId } });
+  await db.financialTransaction.updateMany({ where: { societyId }, data: { loanId: null, investmentId: null } });
+  await db.loan.deleteMany({ where: { societyId } });
+  await db.investment.deleteMany({ where: { societyId } });
   await db.financialTransaction.deleteMany({ where: { societyId, type: 'REVERSAL' } });
   await db.financialTransaction.deleteMany({ where: { societyId } });
   await db.ledgerAccount.deleteMany({ where: { societyId } });
@@ -44,8 +47,8 @@ test.afterAll(async () => {
   if (societyId) await db.society.delete({ where: { id: societyId } });
   await db.$disconnect();
 });
-test('cash account, deposit request, approval, ledger and private member statement', async ({ page }, testInfo) => {
-  test.setTimeout(90000);
+test('cash account, deposit request, approval, ledger and private member statement', async ({ page, browser }, testInfo) => {
+  test.setTimeout(120000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await signIn(page, 'ADMIN'); await page.getByRole('link', { name: 'Finance', exact: true }).click();
   await page.getByRole('button', { name: 'Cash & bank accounts', exact: true }).click(); await page.getByRole('button', { name: 'Add account', exact: true }).click();
@@ -79,5 +82,34 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath('member-statement-mobile.png'), fullPage: true, animations: 'disabled' });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({width:1280,height:720}); await signOut(page); await signIn(page,'ACCOUNTANT');
+  const approverContext = await browser.newContext(); const approverPage = await approverContext.newPage(); await signIn(approverPage,'APPROVER');
+  const cash = await db.ledgerAccount.findFirstOrThrow({where:{societyId,code:'CASH-01'}});
+  async function submitProduct(type:string, amount:string, fill:(dialog:ReturnType<typeof page.getByRole>)=>Promise<void>) {
+    await page.goto('/finance'); await page.getByRole('button',{name:'New transaction',exact:true}).click(); const dialog=page.getByRole('dialog',{name:'New transaction',exact:true});
+    await dialog.getByLabel('Transaction type',{exact:true}).selectOption(type); await dialog.getByLabel('Cash or bank account',{exact:true}).selectOption(cash.id);
+    await fill(dialog); if(type!=='INVESTMENT_RETURN')await dialog.getByLabel('Amount (BDT)').fill(amount);
+    await dialog.getByRole('button',{name:'Submit for approval',exact:true}).click(); await expect(dialog).not.toBeVisible();
+    const request=await db.financialTransaction.findFirstOrThrow({where:{societyId,type:type as any,status:'PENDING'},orderBy:{createdAt:'desc'}});
+    await approverPage.goto('/approvals'); const row=approverPage.getByRole('row').filter({hasText:request.transactionNo}); await row.getByRole('button',{name:'Review',exact:true}).click();
+    const review=approverPage.getByRole('dialog'); await review.getByRole('button',{name:'Approve request',exact:true}).click(); await expect(review.getByText('Posted',{exact:true})).toBeVisible();
+    await review.getByRole('button',{name:'Close dialog',exact:true}).click();
+    return db.financialTransaction.findUniqueOrThrow({where:{id:request.id}});
+  }
+  const loanRequest=await submitProduct('LOAN_DISBURSEMENT','120.01',async dialog=>{await dialog.getByLabel('Member',{exact:true}).selectOption(memberId);await dialog.getByLabel('Number of monthly installments').fill('3');await dialog.getByLabel('First installment date').fill('2027-01-31');});
+  await page.goto('/loans'); await expect(page.getByRole('cell',{name:'৳ 120.01',exact:true}).first()).toBeVisible();await page.getByRole('button',{name:'View history',exact:true}).click();
+  const schedule=page.getByRole('dialog',{name:'Loan schedule & history'}); await expect(schedule.getByRole('cell',{name:'2027-02-28',exact:true})).toBeVisible();await schedule.getByRole('button',{name:'Close dialog',exact:true}).click();
+  await submitProduct('LOAN_REPAYMENT','40.00',async dialog=>{await dialog.getByLabel('Loan',{exact:true}).selectOption(loanRequest.loanId!);});
+  const purchased=await submitProduct('INVESTMENT_PURCHASE','200',async dialog=>{await dialog.getByLabel('Investment title').fill('Community business');await dialog.getByLabel('Counterparty',{exact:true}).fill('Business partner');});
+  await submitProduct('INVESTMENT_RETURN','60',async dialog=>{await dialog.getByLabel('Investment',{exact:true}).selectOption(purchased.investmentId!);await dialog.getByLabel('Principal returned (BDT)').fill('50');await dialog.getByLabel('Profit received (BDT)').fill('10');});
+  await page.goto('/investments'); await expect(page.getByRole('cell',{name:'৳ 150.00',exact:true})).toBeVisible();await expect(page.getByRole('cell',{name:'৳ 10.00',exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath('investments-desktop.png'),fullPage:true});
+  await submitProduct('EXPENSE','25',async dialog=>{await dialog.getByLabel('Expense category').fill('Office');await dialog.getByLabel('Payee',{exact:true}).fill('Stationery supplier');});
+  await page.goto('/expenses'); await expect(page.getByText('Net approved expenses in this period: ৳ 25.00')).toBeVisible();
+  await page.goto('/bank');await expect(page.getByRole('cell',{name:'৳ 1,255.24',exact:true})).toBeVisible();
+  await page.screenshot({path:testInfo.outputPath('bank-summary-desktop.png'),fullPage:true});
+  await signOut(page);await signIn(page,'MEMBER');await expect(page.getByRole('cell',{name:'৳ 80.01',exact:true})).toBeVisible();
+  await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('member-loans-mobile.png'),fullPage:true,animations:'disabled'});
+  await approverContext.close();
   expect(errors).toEqual([]);
 });

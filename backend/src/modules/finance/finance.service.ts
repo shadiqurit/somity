@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import { db } from '../../config/database.js';
 import { audit } from '../../services/audit.js';
 import { AppError } from '../../utils/errors.js';
+import { productLines, isAsset, principalSchedule } from './finance.posting.js';
 import type { accountSchema, policySchema, reversalSchema, decisionSchema, TransactionInput, FinanceListInput } from './finance.validator.js';
 
 // Match MySQL aggregate precision so large balances retain their cents.
@@ -62,7 +63,7 @@ export async function accounts(societyId: string) {
     return Promise.all(items.map(async account => {
       const totals = await tx.ledgerEntry.aggregate({ where: { societyId, accountId: account.id, transaction: { status: 'POSTED' } }, _sum: { debit: true, credit: true } });
       const debit = totals._sum.debit ?? zero(); const credit = totals._sum.credit ?? zero();
-      return { ...account, balance: money(account.kind === 'MEMBER_SAVINGS' ? credit.minus(debit) : debit.minus(credit)) };
+      return { ...account, balance: money(['MEMBER_SAVINGS', 'INVESTMENT_INCOME'].includes(account.kind) ? credit.minus(debit) : debit.minus(credit)) };
     }));
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
@@ -91,16 +92,36 @@ export async function submit(societyId: string, actorId: string, input: Transact
   const hash = requestHash({ actorId, ...normalized });
   return financialMutation(societyId, async tx => {
     const prior = await replay(tx, societyId, key, hash); if (prior) return prior;
-    const member = await tx.member.findFirst({ where: { id: input.memberId, societyId, archivedAt: null, status: 'ACTIVE' } });
-    if (!member) throw new AppError(404, 'Active member not found in this society');
+    let memberId = input.memberId;
+    if (memberId && !await tx.member.findFirst({ where: { id: memberId, societyId, archivedAt: null, status: 'ACTIVE' } })) throw new AppError(404, 'Active member not found in this society');
     const account = await tx.ledgerAccount.findFirst({ where: { id: input.cashAccountId, societyId, isActive: true, kind: { in: ['CASH', 'BANK'] } } });
     if (!account) throw new AppError(404, 'Active cash or bank account not found in this society');
+    if (input.loanId) {
+      const loan = await tx.loan.findUnique({ where: { societyId_id: { societyId, id: input.loanId } }, include: { disbursement: true } });
+      if (!loan) throw new AppError(404, 'Loan not found in this society');
+      memberId = loan.memberId;
+      await assertProductDate(tx, societyId, loan.disbursement, new Date(input.effectiveDate));
+    }
+    if (input.investmentId) {
+      const investment = await tx.investment.findUnique({ where: { societyId_id: { societyId, id: input.investmentId } }, include: { purchase: true } });
+      if (!investment) throw new AppError(404, 'Investment not found in this society');
+      await assertProductDate(tx, societyId, investment.purchase, new Date(input.effectiveDate));
+    }
+    if (input.destinationAccountId && !await tx.ledgerAccount.findFirst({ where: { societyId, id: input.destinationAccountId, kind: { in: ['CASH', 'BANK'] }, isActive: true } })) throw new AppError(404, 'Destination account not found in this society');
+    if (input.type === 'LOAN_DISBURSEMENT') principalSchedule(input.amount, input.installmentCount!, input.firstDueDate!);
+    if (input.type === 'INVESTMENT_RETURN' && !new Prisma.Decimal(input.principalReturned!).plus(input.profit!).eq(input.amount)) throw new AppError(422, 'Return amount must equal principal returned plus profit');
+    const details = Object.fromEntries(['installmentCount', 'firstDueDate', 'title', 'counterparty', 'principalReturned', 'profit', 'category', 'payee', 'destinationAccountId'].filter(key => normalized[key as keyof typeof normalized] != null).map(key => [key, normalized[key as keyof typeof normalized]])) as Prisma.InputJsonObject;
     const captured = await tx.financePolicy.findUnique({ where: { societyId } });
-    const item = await tx.financialTransaction.create({ data: { societyId, ...normalized, effectiveDate: new Date(input.effectiveDate), createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: `TX-${randomBytes(12).toString('hex').toUpperCase()}`, policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
-    await audit(tx, actorId, 'FINANCE_REQUESTED', 'transaction', item.id, { ...normalized, requiredApprovals: item.requiredApprovals, policyVersion: item.policyVersion }, societyId);
+    const item = await tx.financialTransaction.create({ data: { societyId, type: input.type, memberId, cashAccountId: input.cashAccountId, amount: normalized.amount, effectiveDate: new Date(input.effectiveDate), reference: input.reference, note: input.note, loanId: input.loanId, investmentId: input.investmentId, details, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: 'TX-' + randomBytes(12).toString('hex').toUpperCase(), policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
+    await audit(tx, actorId, 'FINANCE_REQUESTED', 'transaction', item.id, { ...JSON.parse(JSON.stringify(normalized)), requiredApprovals: item.requiredApprovals, policyVersion: item.policyVersion }, societyId);
     return get(societyId, item.id, tx);
   });
 }
+async function assertProductDate(tx: Tx, societyId: string, original: { id: string; effectiveDate: Date; status: string }, date: Date) {
+  if (original.status !== 'POSTED' || date < original.effectiveDate) throw new AppError(422, 'Date cannot precede the approved loan or investment');
+  if (await tx.financialTransaction.findFirst({ where: { societyId, reversalOfId: original.id, status: 'POSTED' } })) throw new AppError(409, 'The loan or investment has been reversed');
+}
+
 export async function requestReversal(societyId: string, actorId: string, id: string, input: z.infer<typeof reversalSchema>, key: string) {
   const hash = requestHash({ actorId, reversalOfId: id, ...input });
   return financialMutation(societyId, async tx => {
@@ -111,7 +132,7 @@ export async function requestReversal(societyId: string, actorId: string, id: st
     if (new Date(input.effectiveDate) < original.effectiveDate) throw new AppError(422, 'Reversal date cannot precede the original transaction');
     if (await tx.financialTransaction.findFirst({ where: { societyId, reversalOfId: id, status: { in: ['PENDING', 'POSTED'] } } })) throw new AppError(409, 'A reversal is already pending or posted');
     const captured = await tx.financePolicy.findUnique({ where: { societyId } });
-    const item = await tx.financialTransaction.create({ data: { societyId, type: 'REVERSAL', memberId: original.memberId, cashAccountId: original.cashAccountId, amount: original.amount, effectiveDate: new Date(input.effectiveDate), reference: original.transactionNo, note: input.note, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: `RV-${randomBytes(12).toString('hex').toUpperCase()}`, reversalOfId: id, policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
+    const item = await tx.financialTransaction.create({ data: { societyId, type: 'REVERSAL', memberId: original.memberId, loanId: original.loanId, investmentId: original.investmentId, details: original.details ?? Prisma.JsonNull, cashAccountId: original.cashAccountId, amount: original.amount, effectiveDate: new Date(input.effectiveDate), reference: original.transactionNo, note: input.note, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: `RV-${randomBytes(12).toString('hex').toUpperCase()}`, reversalOfId: id, policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
     await audit(tx, actorId, 'FINANCE_REVERSAL_REQUESTED', 'transaction', item.id, { reversalOfId: id, ...input }, societyId);
     return get(societyId, item.id, tx);
   });
@@ -119,11 +140,11 @@ export async function requestReversal(societyId: string, actorId: string, id: st
 
 // Include historical dates when checking funds: a backdated withdrawal must not
 // make a member or cash/bank account negative at any later date either.
-async function assertFunds(tx: Tx, societyId: string, accountId: string, memberId: string | null, effectiveDate: Date, delta: Prisma.Decimal, liability: boolean) {
+async function assertFunds(tx: Tx, societyId: string, accountId: string, memberId: string | null, effectiveDate: Date, delta: Prisma.Decimal, liability: boolean, scope: Prisma.FinancialTransactionWhereInput = {}) {
   const where: Prisma.LedgerEntryWhereInput = { societyId, accountId, ...(memberId ? { memberId } : {}), transaction: { status: 'POSTED' } };
-  const before = await tx.ledgerEntry.aggregate({ where: { ...where, transaction: { status: 'POSTED', effectiveDate: { lt: effectiveDate } } }, _sum: { debit: true, credit: true } });
+  const before = await tx.ledgerEntry.aggregate({ where: { ...where, transaction: { ...scope, status: 'POSTED', effectiveDate: { lt: effectiveDate } } }, _sum: { debit: true, credit: true } });
   let balance = liability ? (before._sum.credit ?? zero()).minus(before._sum.debit ?? zero()) : (before._sum.debit ?? zero()).minus(before._sum.credit ?? zero());
-  const after = await tx.ledgerEntry.findMany({ where: { ...where, transaction: { status: 'POSTED', effectiveDate: { gte: effectiveDate } } }, include: { transaction: { select: { effectiveDate: true } } } });
+  const after = await tx.ledgerEntry.findMany({ where: { ...where, transaction: { ...scope, status: 'POSTED', effectiveDate: { gte: effectiveDate } } }, include: { transaction: { select: { effectiveDate: true } } } });
   const daily = new Map<string, Prisma.Decimal>([[effectiveDate.toISOString().slice(0, 10), delta]]);
   for (const entry of after) {
     const day = entry.transaction.effectiveDate.toISOString().slice(0, 10);
@@ -131,7 +152,7 @@ async function assertFunds(tx: Tx, societyId: string, accountId: string, memberI
   }
   for (const day of [...daily.keys()].sort()) {
     balance = balance.plus(daily.get(day)!);
-    if (balance.lt(0)) throw new AppError(409, memberId ? 'Insufficient member savings for this date and later transactions' : 'Insufficient funds in the selected cash or bank account');
+    if (balance.lt(0)) throw new AppError(409, scope.loanId ? 'Repayment exceeds outstanding loan principal for this date' : scope.investmentId ? 'Return exceeds outstanding investment principal for this date' : memberId ? 'Insufficient member savings for this date and later transactions' : 'Insufficient funds in the selected cash or bank account');
   }
 }
 export function balancedLines(amount: Prisma.Decimal, cashAccountId: string, savingsAccountId: string, increasesSavings: boolean) {
@@ -144,26 +165,33 @@ export function balancedLines(amount: Prisma.Decimal, cashAccountId: string, sav
   return lines;
 }
 async function post(tx: Tx, societyId: string, id: string, actorId: string) {
-  const item = await tx.financialTransaction.findUniqueOrThrow({ where: { societyId_id: { societyId, id } } });
-  let increasesSavings = item.type === 'DEPOSIT';
-  if (item.type === 'REVERSAL') {
-    const original = await tx.financialTransaction.findUniqueOrThrow({ where: { societyId_id: { societyId, id: item.reversalOfId! } } });
-    if (original.status !== 'POSTED' || original.type === 'REVERSAL') throw new AppError(409, 'Original transaction cannot be reversed');
-    if (await tx.financialTransaction.findFirst({ where: { societyId, reversalOfId: original.id, status: 'POSTED' } })) throw new AppError(409, 'Original transaction is already reversed');
-    increasesSavings = original.type === 'WITHDRAWAL';
-  } else {
-    if (!await tx.member.findFirst({ where: { id: item.memberId, societyId, archivedAt: null, status: 'ACTIVE' } })) throw new AppError(409, 'Member is no longer active');
+  let item = await tx.financialTransaction.findUniqueOrThrow({ where: { societyId_id: { societyId, id } } });
+  if (item.type !== 'REVERSAL' && item.memberId && item.type !== 'LOAN_REPAYMENT' && !await tx.member.findFirst({ where: { id: item.memberId, societyId, archivedAt: null, status: 'ACTIVE' } })) throw new AppError(409, 'Member is no longer active');
+  if (item.type === 'LOAN_REPAYMENT') {
+    const loan = await tx.loan.findUniqueOrThrow({ where: { societyId_id: { societyId, id: item.loanId! } }, include: { disbursement: true } });
+    await assertProductDate(tx, societyId, loan.disbursement, item.effectiveDate);
   }
-  if (!await tx.ledgerAccount.findFirst({ where: { id: item.cashAccountId, societyId, isActive: true, kind: { in: ['CASH', 'BANK'] } } })) throw new AppError(409, 'Cash or bank account is no longer active');
-  const savings = await savingsAccount(tx, societyId);
-  const delta = increasesSavings ? item.amount : item.amount.negated();
-  await assertFunds(tx, societyId, savings.id, item.memberId, item.effectiveDate, delta, true);
-  await assertFunds(tx, societyId, item.cashAccountId, null, item.effectiveDate, delta, false);
-  const entries = balancedLines(item.amount, item.cashAccountId, savings.id, increasesSavings);
+  if (item.type === 'INVESTMENT_RETURN') {
+    const investment = await tx.investment.findUniqueOrThrow({ where: { societyId_id: { societyId, id: item.investmentId! } }, include: { purchase: true } });
+    await assertProductDate(tx, societyId, investment.purchase, item.effectiveDate);
+  }
+  const entries = await productLines(tx, item);
+  item = await tx.financialTransaction.findUniqueOrThrow({ where: { id } });
+  for (const entry of entries) {
+    const account = await tx.ledgerAccount.findUniqueOrThrow({ where: { societyId_id: { societyId, id: entry.accountId } } });
+    if (!account.isActive) throw new AppError(409, 'Posting account is no longer active');
+    const liability = account.kind === 'MEMBER_SAVINGS';
+    if (liability || isAsset(account.kind)) {
+      const scope = account.kind === 'LOAN_RECEIVABLE' ? { loanId: item.loanId } : account.kind === 'INVESTMENT_ASSET' ? { investmentId: item.investmentId } : {};
+      const delta = liability ? entry.credit.minus(entry.debit) : entry.debit.minus(entry.credit);
+      await assertFunds(tx, societyId, account.id, liability ? item.memberId : null, item.effectiveDate, delta, liability, scope);
+    }
+  }
   await tx.ledgerEntry.createMany({ data: entries.map(line => ({ ...line, societyId, transactionId: id, memberId: item.memberId })) });
   await tx.financialTransaction.update({ where: { societyId_id: { societyId, id } }, data: { status: 'POSTED', postedAt: new Date() } });
   await audit(tx, actorId, 'FINANCE_POSTED', 'transaction', id, { type: item.type, amount: money(item.amount), reversalOfId: item.reversalOfId }, societyId);
 }
+
 export async function decide(societyId: string, actorId: string, id: string, input: z.infer<typeof decisionSchema>) {
   return financialMutation(societyId, async tx => {
     const item = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } }, include: { decisions: true } });

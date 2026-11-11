@@ -1,5 +1,7 @@
 # Phase 2: member savings and approvals
 
+The subsequent loan, investment, expense and bank-transfer increment is now implemented. See [FINANCIAL_MODULES.md](FINANCIAL_MODULES.md) for its current workflow, calculation rules, permissions and migration. The sections below describe the original member-savings increment.
+
 This increment implements member deposits and withdrawals, cash/bank accounts, one- or two-person approval, double-entry posting, reversals, society ledger and member statements. It builds on the existing society boundary and uses the configured MySQL server. It does not provision another MySQL instance or recreate `.local`.
 
 ## Workflow
@@ -55,4 +57,4 @@ The pre-upgrade SQL and uploaded-file backup for this workspace is in `backups/s
 
 Unit tests cover decimal validation and exact balanced lines. MySQL tests cover permissions, tenant foreign keys, pending/rejected/cancelled effects, idempotency, concurrent approvals and withdrawals, policy snapshots, distinct approvers, self-approval, date/fund checks, reversal preservation, member ownership and statement pagination/totals. Browser tests exercise account creation, request submission, approval, ledger and a private member statement on mobile, alongside the existing Phase 1 workflows.
 
-Loans, investments, profit distribution, income/expenses, bank-to-bank transfers, opening-balance journals, PDF/Excel export, and scheduled/encrypted backup UI remain later increments. This release manages BDT member savings and does not expose unfinished features or fabricated balances.
+Loans, investments with principal/profit returns, expenses and cash/bank transfers have been added in the [financial modules increment](FINANCIAL_MODULES.md). Automatic profit distribution, opening-balance journals, PDF/Excel export and scheduled/encrypted backup UI remain later work.

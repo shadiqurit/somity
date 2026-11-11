@@ -1,5 +1,6 @@
 import type { RequestHandler } from 'express';
 import * as service from './finance.service.js';
+import * as reports from './finance.reports.js';
 import { accountSchema, decisionSchema, idSchema, keySchema, listSchema, policySchema, reversalSchema, transactionSchema, dateRangeSchema } from './finance.validator.js';
 import { AppError } from '../../utils/errors.js';
 
@@ -21,4 +22,11 @@ export const ownStatement: RequestHandler = async (req, res) => {
 };
 export const summary: RequestHandler = async (req, res) => { res.json(await service.summary(req.societyId, dateRangeSchema.parse(req.query))); };
 export const ledger: RequestHandler = async (req, res) => { res.json(await service.ledger(req.societyId, listSchema.parse(req.query))); };
+export const loans: RequestHandler = async (req, res) => { res.json(await reports.loans(req.societyId, listSchema.parse(req.query), undefined, req.params.id ? id(req.params.id) : undefined)); };
+export const ownLoans: RequestHandler = async (req, res) => {
+  if (!req.user.memberId) throw new AppError(404, 'No member profile linked');
+  res.json(await reports.loans(req.societyId, listSchema.parse(req.query), req.user.memberId, req.params.id ? id(req.params.id) : undefined));
+};
+export const investments: RequestHandler = async (req, res) => { res.json(await reports.investments(req.societyId, listSchema.parse(req.query), req.params.id ? id(req.params.id) : undefined)); };
+export const bankSummary: RequestHandler = async (req, res) => { res.json(await reports.bankSummary(req.societyId, dateRangeSchema.parse(req.query))); };
 

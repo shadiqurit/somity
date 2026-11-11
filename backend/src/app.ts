@@ -24,7 +24,8 @@ app.get('/api/health', async (_req, res) => {
   await db.$queryRaw`SELECT 1`;
   res.json({ status: 'ok', version: '1.1.0', capabilities: { memberPhotoRemoval: true, supersededPhotoCleanup: true, multiSociety: true, memberFinance: true } });
 });
-app.use('/api', rateLimit({ windowMs: 60000, limit: 300, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: { message: 'Too many requests. Please wait a minute' } } }));
+// Browser suites share one loopback IP and exercise several users in seconds.
+app.use('/api', rateLimit({ windowMs: 60000, limit: env.NODE_ENV === 'test' ? 10000 : 300, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: { message: 'Too many requests. Please wait a minute' } } }));
 app.use('/api/auth', authRouter);
 app.use('/api', authenticate, requirePasswordChanged);
 app.use('/api/societies', societyRouter);
