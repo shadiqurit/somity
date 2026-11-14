@@ -82,7 +82,7 @@ The tests refuse a non-test schema. They create uniquely named fixtures and remo
 
 ## Deployment and later upgrades
 
-For a Windows VPS, follow the [Windows deployment guide](docs/WINDOWS_DEPLOYMENT.md) for MySQL, HTTPS, and automatic service startup.
+For `somity.shadiqur.bd`, use the [Windows Nginx deployment guide](docs/WINDOWS_NGINX_DEPLOYMENT.md). The [Windows deployment guide](docs/WINDOWS_DEPLOYMENT.md) covers Caddy.
 
 Run `npm run build`, then `npm run start -w backend`. Serve `frontend/dist` with SPA history fallback and reverse-proxy `/api` to the API's loopback listener. Set NODE_ENV=production, a matching HTTPS FRONTEND_ORIGIN, a strong secret and persistent private STORAGE_DIR. Configure TRUST_PROXY only for the actual number of trusted reverse-proxy hops. Production refresh cookies require HTTPS. Do not use the Vite dev server for production.
 

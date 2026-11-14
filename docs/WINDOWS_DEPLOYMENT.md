@@ -1,5 +1,7 @@
 # Deploy Somity on a Windows VPS
 
+For `somity.shadiqur.bd`, see the [Windows Nginx deployment guide](WINDOWS_NGINX_DEPLOYMENT.md).
+
 This setup uses `C:\Somity\app` for the repository and `C:\Somity\data\uploads` for private member photos. Caddy serves the Vue build over HTTPS and forwards `/api` to the Express server at `127.0.0.1:4000`. The examples assume one VPS with MySQL on the same machine and an x64 Windows installation.
 
 ## 1. Prepare the VPS
@@ -86,7 +88,7 @@ Remove `SEED_ADMIN_PASSWORD` from `.env` after the seed succeeds. Keep `SEED_ADM
 Copy `caddy.exe` into `C:\Somity\services`. Copy `WinSW-x64.exe` into that directory twice as `somity-api.exe` and `somity-web.exe`. Copy the repo templates and replace `somity.example.com` in the installed `Caddyfile` with the hostname from `FRONTEND_ORIGIN`. Update the Node executable path in `somity-api.xml` if Node was installed somewhere else. [Caddy's Windows service instructions](https://caddyserver.com/docs/running#windows-service) · [WinSW v2 configuration](https://github.com/winsw/winsw/blob/v2.12.0/doc/xmlConfigFile.md)
 
 ```powershell
-Copy-Item C:\Somity\app\deploy\windows\* C:\Somity\services\
+Copy-Item C:\Somity\app\deploy\windows\Caddyfile, C:\Somity\app\deploy\windows\somity-api.xml, C:\Somity\app\deploy\windows\somity-web.xml C:\Somity\services\
 notepad.exe C:\Somity\services\Caddyfile
 ```
 
