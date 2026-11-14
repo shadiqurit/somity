@@ -2,7 +2,7 @@
 
 This configuration uses the existing Nginx installation at `C:\nginx` and the app checkout at `D:\app\somity`. Nginx serves the frontend and sends API requests to `127.0.0.1:3004`.
 
-## Build and start Somity
+## Build Somity
 
 Set these values in `D:\app\somity\backend\.env`. Keep the production `DATABASE_URL` and `JWT_ACCESS_SECRET` there as well. Create the uploads directory and give the account running the API permission to write to it. If moving an existing installation, copy its uploaded files there along with restoring its database. Leave `VITE_API_URL` unset or empty for the same-origin frontend build.
 
@@ -24,10 +24,23 @@ npm.cmd run db:generate
 if ($LASTEXITCODE -ne 0) { throw 'Prisma generation failed.' }
 npm.cmd run build
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
-npm.cmd run start -w backend
 ```
 
-The last command runs the API in the foreground. For automatic startup, use the existing Somity API service or adapt the [WinSW API template](../deploy/windows/somity-api.xml) with `D:\app\somity\backend` as its working directory and a writable log directory. The service runs `node dist/src/server.js` from that working directory. Restart it after changing `.env` or rebuilding the backend.
+## Start the backend with PM2
+
+Run these commands from `D:\app\somity` under the Windows account that will manage PM2. If an earlier Somity backend is already listening on port `3004`, stop that process before the first PM2 start.
+
+```powershell
+# Install once if PM2 is missing.
+npm.cmd install --global pm2
+pm2.cmd startOrRestart .\ecosystem.config.js
+pm2.cmd status somity-api
+Invoke-RestMethod http://127.0.0.1:3004/api/health
+```
+
+The [PM2 config](../ecosystem.config.js) starts one instance of `backend\dist\src\server.js`, with `backend` as the working directory so dotenv loads `backend\.env`. It sets production mode and port `3004`. After rebuilding or changing `.env`, run `pm2.cmd startOrRestart .\ecosystem.config.js` again. Use `pm2.cmd logs somity-api --lines 50 --nostream` to inspect startup errors. [PM2 ecosystem configuration](https://pm2.keymetrics.io/docs/usage/application-declaration/)
+
+Once the health check returns `status: ok`, run `pm2.cmd save`. For automatic recovery after a Windows reboot, use your existing PM2 startup setup or create an **At startup** task in Windows Task Scheduler that runs `pm2.cmd resurrect`. Set the action to `cmd.exe` with arguments `/d /c ""C:\path\to\pm2.cmd" resurrect"`, using the full path from `(Get-Command pm2.cmd).Source`. Run the task under the same account and with the same `PM2_HOME` if customized. Select **Run whether user is logged on or not** and configure a short startup delay so MySQL can start first. [PM2 startup and restore](https://pm2.keymetrics.io/docs/usage/startup/) · [Windows startup triggers](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasktrigger?view=windowsserver2025-ps)
 
 ## Load the Nginx site
 
