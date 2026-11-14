@@ -1,0 +1,17 @@
+<service>
+  <id>SomityWeb</id>
+  <name>Somity Web</name>
+  <executable>%BASE%\caddy.exe</executable>
+  <arguments>run --config "%BASE%\Caddyfile" --adapter caddyfile</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <serviceaccount>
+    <domain>NT AUTHORITY</domain>
+    <user>NetworkService</user>
+  </serviceaccount>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delay="10 sec" />
+  <env name="XDG_DATA_HOME" value="C:\Somity\services\caddy-state" />
+  <env name="XDG_CONFIG_HOME" value="C:\Somity\services\caddy-state" />
+  <logpath>C:\Somity\services\web-logs</logpath>
+  <log mode="roll" />
+</service>

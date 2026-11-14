@@ -82,6 +82,8 @@ The tests refuse a non-test schema. They create uniquely named fixtures and remo
 
 ## Deployment and later upgrades
 
+For a Windows VPS, follow the [Windows deployment guide](docs/WINDOWS_DEPLOYMENT.md) for MySQL, HTTPS, and automatic service startup.
+
 Run `npm run build`, then `npm run start -w backend`. Serve `frontend/dist` with SPA history fallback and reverse-proxy `/api` to the API's loopback listener. Set NODE_ENV=production, a matching HTTPS FRONTEND_ORIGIN, a strong secret and persistent private STORAGE_DIR. Configure TRUST_PROXY only for the actual number of trusted reverse-proxy hops. Production refresh cookies require HTTPS. Do not use the Vite dev server for production.
 
 Commit migrations and lockfile. Use `npm run db:dev -w backend -- --name descriptive_name` for new development schema changes, review generated SQL, and apply via `npm run db:migrate` in deployment. Prisma CLI/client/adapter are pinned to the same stable major/version. Do not run `db push` against production. Back up database **and uploaded files** before upgrades; automated/encrypted backups are outside Phase 1.
