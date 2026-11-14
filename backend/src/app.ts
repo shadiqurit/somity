@@ -11,7 +11,7 @@ import { errorHandler } from './middleware/error.js';
 import { societyRouter } from './modules/societies/society.routes.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { memberRouter } from './modules/members/member.routes.js';
-import { userRouter } from './modules/users/user.routes.js';
+import { platformUserRouter, userRouter } from './modules/users/user.routes.js';
 import { uploadRouter } from './modules/uploads/upload.routes.js';
 import { dashboardRouter } from './modules/dashboard/dashboard.routes.js';
 import { financeRouter } from './modules/finance/finance.routes.js';
@@ -29,6 +29,7 @@ app.use('/api', rateLimit({ windowMs: 60000, limit: env.NODE_ENV === 'test' ? 10
 app.use('/api/auth', authRouter);
 app.use('/api', authenticate, requirePasswordChanged);
 app.use('/api/societies', societyRouter);
+app.use('/api/platform/users', platformUserRouter);
 app.use('/api', requireSociety);
 app.get('/api/roles', requirePermission('users.manage'), async (_req, res) => res.json(await db.role.findMany({ where: { code: { not: 'SUPER_ADMIN' } }, select: { code: true, name: true }, orderBy: { name: 'asc' } })));
 app.use('/api/members', memberRouter);

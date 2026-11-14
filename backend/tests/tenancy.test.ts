@@ -156,4 +156,48 @@ describe('multi-society isolation with MySQL', () => {
     await request(app).get('/api/users').set(headers(dualToken, a)).expect(200);
     expect((await db.user.findUniqueOrThrow({ where: { id: dualUserId } })).isActive).toBe(true);
   });
+  it('lets only a super admin reset a global user password and revoke sessions in every society', async () => {
+    const superHeaders = { Authorization: `Bearer ${superToken}` };
+    const email = `${tag}-reset@example.test`;
+    const adminRole = await db.role.findUniqueOrThrow({ where: { code: 'ADMIN' } });
+    const memberRole = await db.role.findUniqueOrThrow({ where: { code: 'MEMBER' } });
+    const user = await db.user.create({ data: {
+      name: 'Password Reset Test', email, passwordHash: await hashPassword(password), mustChangePassword: false,
+      memberships: { create: [{ societyId: a, roleId: adminRole.id }, { societyId: b, roleId: memberRole.id }] },
+    } });
+    users.push(user.id);
+    const resetPath = `/api/platform/users/${user.id}/password`;
+    const reset = { password: 'TenantReset123' };
+    const tokenA = await login(email);
+    const agent = request.agent(app);
+    const sessionB = await agent.post('/api/auth/login').set('Origin', origin).send({ email, password }).expect(200);
+    await request(app).get('/api/auth/me').set(headers(sessionB.body.accessToken, b)).expect(200);
+    await request(app).get('/api/platform/users').set(headers(adminA, a)).expect(403);
+    await request(app).put(resetPath).send(reset).expect(401);
+    await request(app).put(resetPath).set(headers(adminA, a)).send(reset).expect(403);
+
+    const directory = await request(app).get('/api/platform/users').set(superHeaders).query({ search: tag }).expect(200);
+    expect(directory.body.items.filter((entry: { id: string }) => entry.id === user.id)).toEqual([
+      { id: user.id, email, name: user.name, isActive: true, roles: [{ role: { name: 'Admin' } }, { role: { name: 'Member' } }] },
+    ]);
+    expect(directory.body.items.map((user: { email: string }) => user.email)).toEqual(expect.arrayContaining([
+      `${tag}-super@example.test`, `${tag}-admin-a@example.test`, `${tag}-admin-b@example.test`,
+    ]));
+    await request(app).put(resetPath).set(superHeaders).send({ password: 'weak' }).expect(422);
+    await request(app).put('/api/platform/users/missing-user/password').set(superHeaders).send(reset).expect(404);
+    await request(app).put(resetPath).set(superHeaders).send(reset).expect(204);
+
+    await request(app).get('/api/users').set(headers(tokenA, a)).expect(401);
+    await request(app).get('/api/auth/me').set(headers(sessionB.body.accessToken, b)).expect(401);
+    const expired = await agent.post('/api/auth/refresh').set('Origin', origin).expect(401);
+    expect(expired.body.error.message).toBe('Session reuse detected. Please sign in again');
+    await request(app).post('/api/auth/login').set('Origin', origin).send({ email, password }).expect(401);
+    const updated = await request(app).post('/api/auth/login').set('Origin', origin).send({ email, ...reset }).expect(200);
+    expect(updated.body.user.mustChangePassword).toBe(true);
+    await request(app).get('/api/users').set(headers(updated.body.accessToken, a)).expect(403);
+    const log = await db.auditLog.findFirstOrThrow({ where: { action: 'PASSWORD_RESET', entityId: user.id } });
+    expect(log).toMatchObject({ actorId: users[0], societyId: null, changes: null });
+    await request(app).post('/api/auth/password').set({ Authorization: `Bearer ${updated.body.accessToken}`, Origin: origin }).send({ currentPassword: reset.password, newPassword: password }).expect(204);
+    await request(app).get('/api/users').set(headers(await login(email), a)).expect(200);
+  });
 });

@@ -13,12 +13,12 @@ const url = new URL(databaseUrl);
 const db = new PrismaClient({ adapter: new PrismaMariaDb({ host: url.hostname, port: Number(url.port || 3306), user: decodeURIComponent(url.username), password: decodeURIComponent(url.password), database: url.pathname.slice(1), connectionLimit: 2 }) });
 const tag = randomUUID().slice(0, 8); const rootEmail = `society-root-${tag}@example.test`; const temp = 'SocietyTemporary123'; const password = 'SocietyPermanent123';
 const societyIds: string[] = []; const userIds: string[] = []; let rootId = '';
-async function signIn(page: Page, email: string, first = false) {
+async function signIn(page: Page, email: string, first = false, temporaryPassword = temp) {
   await page.getByLabel('Email address', { exact: true }).fill(email);
-  await page.getByLabel('Password', { exact: true }).fill(first ? temp : password);
+  await page.getByLabel('Password', { exact: true }).fill(first ? temporaryPassword : password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   if (first) {
-    await page.getByLabel('Current password').fill(temp); await page.getByLabel('New password', { exact: true }).fill(password); await page.getByLabel('Confirm new password').fill(password);
+    await page.getByLabel('Current password').fill(temporaryPassword); await page.getByLabel('New password', { exact: true }).fill(password); await page.getByLabel('Confirm new password').fill(password);
     await page.getByRole('button', { name: 'Save password' }).click(); await signIn(page, email);
   }
   await expect(page.getByRole('heading', { name: 'Overview.' })).toBeVisible();
@@ -57,6 +57,22 @@ test('creates separate societies and isolates admin and approver browser workspa
   await page.screenshot({ path: testInfo.outputPath('societies-platform.png'), fullPage: true });
   await page.getByRole('button', { name: `Open UI Society A ${tag}`, exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Overview.' })).toBeVisible(); await expect(page.getByLabel('Current society')).toHaveValue(societyA.id);
+  const adminBEmail = `society-b-${tag}@example.test`;
+  const resetPassword = 'SocietyReset123';
+  await page.getByRole('link', { name: 'Team & access', exact: true }).click();
+  await page.getByRole('searchbox', { name: 'Search user accounts' }).fill(adminBEmail);
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByRole('row').filter({ hasText: adminBEmail }).getByRole('button', { name: 'Set password' }).click();
+  const reset = page.getByRole('dialog', { name: 'Set password' });
+  await expect(reset).toContainText(adminBEmail);
+  await reset.getByLabel('Temporary password', { exact: true }).fill(resetPassword);
+  await reset.getByLabel('Confirm temporary password').fill(temp);
+  await reset.getByRole('button', { name: 'Set password' }).click();
+  await expect(reset.getByRole('alert')).toHaveText('Passwords do not match');
+  await reset.getByLabel('Confirm temporary password').fill(resetPassword);
+  await reset.getByRole('button', { name: 'Set password' }).click();
+  await expect(page.getByRole('status')).toContainText(`Temporary password set for ${adminBEmail}.`);
+  await page.getByRole('link', { name: 'Overview', exact: true }).click();
   await page.getByRole('link', { name: '+ Add member', exact: true }).click();
   const member = page.getByRole('dialog', { name: 'Add member', exact: true });
   await member.getByLabel('Full name', { exact: true }).fill(`Isolated Member ${tag}`); await member.getByLabel('Phone number').fill('+8801700000000'); await member.getByLabel('Address', { exact: true }).fill('Dhaka, Bangladesh');
@@ -71,7 +87,10 @@ test('creates separate societies and isolates admin and approver browser workspa
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await signIn(page, `society-a-${tag}@example.test`, true);
   await expect(page.getByLabel('Current society')).toHaveValue(societyA.id); await expect(page.getByLabel('Current society').locator('option')).toHaveCount(1);
   await expect(page.getByRole('link', { name: 'Societies', exact: true })).toHaveCount(0);
-  await page.getByRole('link', { name: 'Team & access', exact: true }).click(); await page.getByRole('button', { name: 'Add staff account', exact: true }).click();
+  await page.getByRole('link', { name: 'Team & access', exact: true }).click();
+  await expect(page.getByRole('columnheader', { name: 'Status' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Set password' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add staff account', exact: true }).click();
   const staff = page.getByRole('dialog', { name: 'Add staff account', exact: true });
   await staff.getByLabel('Full name').fill('UI Society A Approver'); await staff.getByLabel('Login email').fill(`society-approver-${tag}@example.test`); await staff.getByLabel('Access role').selectOption('APPROVER'); await staff.getByLabel('Temporary password').fill(temp);
   expect(await staff.getByLabel('Access role').locator('option').allTextContents()).not.toContain('Super Admin');
@@ -80,7 +99,7 @@ test('creates separate societies and isolates admin and approver browser workspa
   await page.getByRole('link', { name: 'Members', exact: true }).click(); await expect(page.locator('tbody')).toContainText(`Isolated Member ${tag}`);
   await expect(page.getByRole('button', { name: '+ Add member', exact: true })).toHaveCount(0); await expect(page.getByRole('link', { name: 'Team & access', exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('society-approver.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await signIn(page, `society-b-${tag}@example.test`, true);
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await signIn(page, adminBEmail, true, resetPassword);
   await expect(page.getByLabel('Current society')).toHaveValue(societyB.id);
   await page.getByRole('link', { name: 'Members', exact: true }).click(); await expect(page.getByRole('heading', { name: 'No members yet' })).toBeVisible();
   expect(errors).toEqual([]);

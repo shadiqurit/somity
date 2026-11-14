@@ -61,8 +61,6 @@ Set `TRUST_PROXY=1` for this direct Caddy setup. Build the app and run the commi
 Set-Location C:\Somity\app
 npm.cmd ci --include=dev
 if ($LASTEXITCODE -ne 0) { throw 'Dependency install failed.' }
-npm.cmd run db:generate
-if ($LASTEXITCODE -ne 0) { throw 'Prisma generation failed.' }
 npm.cmd run build
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 

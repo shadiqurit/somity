@@ -23,7 +23,7 @@ router.beforeEach(async to => {
   await auth.initialize();
   if (!auth.user && !to.meta.public) return '/login';
   if (auth.user?.mustChangePassword && to.path !== '/change-password') return '/change-password';
-  if (auth.user && !auth.user.societyId && auth.user.isSuperAdmin && !['/societies', '/change-password'].includes(to.path)) return '/societies';
+  if (auth.user && !auth.user.societyId && auth.user.isSuperAdmin && !['/societies', '/users', '/change-password'].includes(to.path)) return '/societies';
   if (auth.user && to.path === '/login') return auth.isStaff ? '/' : '/my-profile';
   if (to.meta.permission && !auth.can(String(to.meta.permission))) return auth.isStaff ? '/' : '/my-profile';
 });

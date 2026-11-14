@@ -20,11 +20,11 @@ STORAGE_DIR=D:/app/somity-data/uploads
 Set-Location D:\app\somity
 npm.cmd ci --include=dev
 if ($LASTEXITCODE -ne 0) { throw 'Dependency install failed.' }
-npm.cmd run db:generate
-if ($LASTEXITCODE -ne 0) { throw 'Prisma generation failed.' }
 npm.cmd run build
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 ```
+
+The backend build generates Prisma Client before compiling TypeScript. On an older checkout, run `npm.cmd run db:generate` before `npm.cmd run build` if the compiler reports missing `@prisma/client` exports.
 
 ## Start the backend with PM2
 

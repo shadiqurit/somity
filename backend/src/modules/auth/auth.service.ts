@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
+import type { Prisma } from '@prisma/client';
 import { db } from '../../config/database.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
@@ -43,12 +44,20 @@ function accessToken(userId: string, sessionId: string) {
   return jwt.sign({ sid: sessionId }, env.JWT_ACCESS_SECRET, { subject: userId, expiresIn: '15m', issuer: 'somity-api', audience: 'somity-web', algorithm: 'HS256' });
 }
 const dummyHash = hashPassword('DummyPassword123456');
+
+// Serialize session creation with password updates and their session revocation.
+async function requireCurrentPasswordHash(tx: Prisma.TransactionClient, userId: string, passwordHash: string) {
+  const [user] = await tx.$queryRaw<{ passwordHash: string }[]>`SELECT passwordHash FROM users WHERE id = ${userId} FOR UPDATE`;
+  if (user?.passwordHash !== passwordHash) throw new AppError(401, 'Password changed. Please sign in again');
+}
+
 export async function login(email: string, password: string) {
   const user = await db.user.findUnique({ where: { email }, include: userInclude });
   const valid = await verifyPassword(password, user?.passwordHash ?? await dummyHash);
   if (!user || !valid || !canSignIn(user)) throw new AppError(401, 'Invalid email or password');
   const next = sessionData(user.id);
   const session = await db.$transaction(async tx => {
+    await requireCurrentPasswordHash(tx, user.id, user.passwordHash);
     const session = await tx.refreshSession.create({ data: next.data });
     await audit(tx, user.id, 'AUTH_LOGIN', 'user', user.id);
     return session;
@@ -66,6 +75,7 @@ export async function refresh(token: string, societyId?: string) {
   const principal = await publicUser(session.user, societyId);
   const next = sessionData(session.userId, session.familyId);
   const rotated = await db.$transaction(async tx => {
+    await requireCurrentPasswordHash(tx, session.userId, session.user.passwordHash);
     const claimed = await tx.refreshSession.updateMany({ where: { id: session.id, revokedAt: null }, data: { revokedAt: new Date() } });
     if (claimed.count !== 1) throw new AppError(401, 'Session already refreshed');
     return tx.refreshSession.create({ data: next.data });
@@ -82,8 +92,21 @@ export async function changePassword(userId: string, currentPassword: string, ne
   if (!await verifyPassword(currentPassword, user.passwordHash)) throw new AppError(400, 'Current password is incorrect');
   const passwordHash = await hashPassword(newPassword);
   await db.$transaction(async tx => {
-    await tx.user.update({ where: { id: userId }, data: { passwordHash, mustChangePassword: false } });
-    await tx.refreshSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
+    await requireCurrentPasswordHash(tx, userId, user.passwordHash);
+    await replacePassword(tx, userId, passwordHash, false);
     await audit(tx, userId, 'PASSWORD_CHANGED', 'user', userId);
+  });
+}
+
+async function replacePassword(tx: Prisma.TransactionClient, userId: string, passwordHash: string, mustChangePassword: boolean) {
+  await tx.user.update({ where: { id: userId }, data: { passwordHash, mustChangePassword }, select: { id: true } });
+  await tx.refreshSession.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: new Date() } });
+}
+
+export async function resetPassword(userId: string, password: string, actorId: string) {
+  const passwordHash = await hashPassword(password);
+  await db.$transaction(async tx => {
+    await replacePassword(tx, userId, passwordHash, true);
+    await audit(tx, actorId, 'PASSWORD_RESET', 'user', userId);
   });
 }

@@ -45,6 +45,6 @@ export const requireSociety: RequestHandler = (req, _res, next) => {
   next();
 };
 export const requireSuperAdmin: RequestHandler = (req, _res, next) => {
-  if (!req.user.isSuperAdmin) throw new AppError(403, 'Only Super Admin can manage societies');
+  if (!req.user.isSuperAdmin) throw new AppError(403, 'Super Admin access required');
   next();
 };
