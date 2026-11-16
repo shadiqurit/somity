@@ -12,7 +12,8 @@ const paymentFields = {
   cashAccountId: idSchema, amount: moneySchema, effectiveDate,
   reference: z.string().trim().max(120).default(''), note: z.string().trim().max(500).default(''),
 };
-export const settlementPaymentSchema = z.object({ ...paymentFields, loanId: optionalId }).strict();
+export const settlementPaymentSchema = z.object({ ...paymentFields, loanId: optionalId, settlementId: idSchema.optional() }).strict();
+export const settlementReferenceSchema = z.object({ settlementId: idSchema }).strict();
 export const transactionSchema = z.object({
   type: z.enum(transactionTypes), memberId: optionalId, ...paymentFields,
   loanId: optionalId, investmentId: optionalId, destinationAccountId: optionalId,

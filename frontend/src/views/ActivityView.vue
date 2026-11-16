@@ -25,6 +25,7 @@ const labels: Record<string, string> = {
   SOCIETY_CREATED: 'Created a society', SOCIETY_UPDATED: 'Updated a society', SOCIETY_SELECTED: 'Switched society',
   MEMBER_CREATED: 'Added a member', MEMBER_UPDATED: 'Updated a member', MEMBER_CLOSED: 'Closed a membership',
   MEMBER_SETTLEMENT_STARTED: 'Started final settlement', MEMBER_SETTLEMENT_COMPLETED: 'Completed final settlement',
+  MEMBER_SETTLEMENT_CANCELLED: 'Cancelled final settlement',
   MEMBER_DUES_STATEMENT_VIEWED: 'Viewed dues and receivables',
   MEMBER_ARCHIVED: 'Archived a member', MEMBER_LOGIN_CREATED: 'Created a member login', MEMBER_PROFILE_VIEWED: 'Viewed a member profile',
   MEMBER_PHOTO_UPLOADED: 'Uploaded a member photo', MEMBER_PHOTO_REMOVED: 'Removed a member photo',

@@ -39,6 +39,7 @@ interface Payment {
 }
 
 interface Settlement {
+  id: string | null;
   status: 'NOT_STARTED' | 'OPEN' | 'CLOSED';
   openedAt: string | null;
   closedAt: string | null;
@@ -57,14 +58,36 @@ const busy = ref(false);
 const error = ref('');
 const formError = ref('');
 const notice = ref('');
-const closeOpen = ref(false);
 const statementOpen = ref(false);
-const selected = ref<Due>();
+const selected = ref<Due & { settlementId: string }>();
 const accounts = ref<Account[]>([]);
 const form = ref({ cashAccountId: '', amount: '', effectiveDate: '', reference: '', note: '' });
 let requestKey = '';
 let requestPayload = '';
 
+const actions = {
+  start: {
+    title: 'Start final settlement?',
+    label: 'Confirm start',
+    message: 'Starting records the current balances. Further payments for this member go through final settlement.',
+    variant: 'primary',
+  },
+  cancel: {
+    title: 'Cancel this settlement?',
+    label: 'Confirm cancellation',
+    message: 'Regular member transactions can resume. Pending settlement requests will be cancelled and posted payments will stay in the ledger.',
+    variant: 'danger',
+  },
+  close: {
+    title: 'Close this membership?',
+    label: 'Close membership',
+    message: 'All balances are cleared. Closing ends the member’s portal access and retains the final settlement and payment history.',
+    variant: 'danger',
+  },
+} as const;
+type Action = keyof typeof actions;
+const confirmation = ref<{ action: Action; settlementId?: string }>();
+const dialog = computed(() => actions[confirmation.value?.action ?? 'start']);
 const endpoint = computed(() => `/members/${props.memberId}/settlement`);
 const mayClose = computed(() => settlement.value?.status === 'OPEN' && !settlement.value.pendingTransactions &&
   settlement.value.lines.every(line => line.remaining === '0.00'));
@@ -87,16 +110,16 @@ async function load() {
   }
 }
 
-async function start() {
-  busy.value = true;
-  error.value = '';
-  try {
-    settlement.value = (await api.post<Settlement>(endpoint.value)).data;
-  } catch (e) { error.value = errorMessage(e); }
-  finally { busy.value = false; }
+function confirmAction(action: Action) {
+  const settlementId = settlement.value?.id ?? undefined;
+  if (action !== 'start' && !settlementId) return;
+  formError.value = '';
+  confirmation.value = { action, settlementId };
 }
 
 async function openPayment(line: Due) {
+  const settlementId = settlement.value?.id;
+  if (!settlementId) return;
   busy.value = true;
   error.value = '';
   try {
@@ -105,14 +128,14 @@ async function openPayment(line: Due) {
     requestKey = '';
     requestPayload = '';
     formError.value = '';
-    selected.value = line;
+    selected.value = { ...line, settlementId };
   } catch (e) { error.value = errorMessage(e); }
   finally { busy.value = false; }
 }
 
 async function recordPayment() {
   if (!selected.value) return;
-  const payload = { ...form.value, loanId: selected.value.loanId };
+  const payload = { ...form.value, loanId: selected.value.loanId, settlementId: selected.value.settlementId };
   const fingerprint = JSON.stringify(payload);
   if (requestPayload !== fingerprint) {
     requestKey = newIdempotencyKey();
@@ -129,19 +152,26 @@ async function recordPayment() {
   finally { busy.value = false; }
 }
 
-async function closeMembership() {
+async function submitAction() {
+  const current = confirmation.value;
+  if (!current) return;
+  const { action, settlementId } = current;
   busy.value = true;
   formError.value = '';
   try {
-    settlement.value = (await api.post<Settlement>(`${endpoint.value}/close`)).data;
-    closeOpen.value = false;
-    emit('closed');
+    const path = action === 'start' ? endpoint.value : `${endpoint.value}/${action}`;
+    settlement.value = (await api.post<Settlement>(path, { settlementId })).data;
+    confirmation.value = undefined;
+    notice.value = action === 'cancel' ? 'Settlement cancelled. Regular member transactions can resume.' : '';
+    if (action === 'close') emit('closed');
   } catch (e) { formError.value = errorMessage(e); }
   finally { busy.value = false; }
 }
 
 watch(endpoint, () => {
   settlement.value = undefined;
+  confirmation.value = undefined;
+  selected.value = undefined;
   notice.value = '';
   void load();
 }, { immediate: true });
@@ -160,7 +190,7 @@ watch(endpoint, () => {
       <AppButton variant="secondary" :disabled="loading || busy" @click="load">{{ t('Refresh') }}</AppButton>
     </div>
     <p v-if="error" class="alert error" role="alert">{{ error }}</p>
-    <p v-if="notice" class="alert success" role="status">{{ notice }}</p>
+    <p v-if="notice" class="alert success" role="status">{{ t(notice) }}</p>
     <template v-if="settlement">
       <ul v-if="settlement.lines.length" class="settlement-list" aria-label="Settlement dues">
         <li v-for="line in settlement.lines" :key="line.loanId ?? 'savings'" class="settlement-item">
@@ -186,9 +216,8 @@ watch(endpoint, () => {
         <RouterLink to="/approvals">Open approvals</RouterLink>
       </p>
       <template v-if="settlement.status === 'NOT_STARTED' && auth.can('members.archive')">
-        <p class="under-table-note">Starting settlement records these balances. Further member payments go through this section.</p>
         <div class="form-actions settlement-actions">
-          <AppButton :loading="busy" :disabled="loading || !!settlement.pendingTransactions" @click="start">Start final settlement</AppButton>
+          <AppButton :disabled="busy || loading || !!settlement.pendingTransactions" @click="confirmAction('start')">{{ t('Start final settlement') }}</AppButton>
         </div>
       </template>
       <template v-if="settlement.openedAt">
@@ -210,8 +239,9 @@ watch(endpoint, () => {
           </li>
         </ul>
         <p v-else class="settlement-empty">No settlement payments recorded.</p>
-        <div v-if="mayClose && auth.can('members.archive')" class="form-actions settlement-actions">
-          <AppButton variant="danger" :disabled="loading || busy" @click="closeOpen = true; formError = ''">Close membership</AppButton>
+        <div v-if="settlement.status === 'OPEN' && auth.can('members.archive')" class="form-actions settlement-actions">
+          <AppButton variant="secondary" :disabled="loading || busy" @click="confirmAction('cancel')">{{ t('Cancel final settlement') }}</AppButton>
+          <AppButton v-if="mayClose" variant="danger" :disabled="loading || busy" @click="confirmAction('close')">{{ t('Close membership') }}</AppButton>
         </div>
       </template>
     </template>
@@ -235,9 +265,9 @@ watch(endpoint, () => {
       </div>
     </AppForm>
   </AppModal>
-  <ConfirmDialog :open="closeOpen" title="Close this membership?" confirm-label="Close membership"
-    message="All balances are cleared. Closing ends the member’s portal access and retains the final settlement and payment history."
-    :busy="busy" :error="formError" @close="closeOpen = false" @confirm="closeMembership" />
+  <ConfirmDialog :open="!!confirmation" :title="t(dialog.title)" :confirm-label="t(dialog.label)"
+    :confirm-variant="dialog.variant" :cancel-label="t('Go back')" :message="t(dialog.message)"
+    :busy="busy" :error="formError" @close="confirmation = undefined" @confirm="submitAction" />
 </template>
 
 <style scoped>
@@ -252,6 +282,7 @@ watch(endpoint, () => {
 .settlement-amounts dd { margin: 4px 0 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .settlement-record { margin-top: 8px; }
 .settlement-empty, .settlement-history-heading, .settlement-actions { padding: 14px 24px; margin: 0; }
+.settlement-actions { flex-wrap: wrap; }
 .settlement-empty { color: var(--text-muted); }
 .settlement-history-heading { border-bottom: 1px solid var(--border); }
 @media (max-width: 780px) {

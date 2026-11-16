@@ -477,6 +477,7 @@ describe('Phase 2 financial workflow', () => {
     expect(closed.body.payments).toHaveLength(5);
     expect(closed.body.payments).toContainEqual(expect.objectContaining({ amount: '200.00', type: 'WITHDRAWAL', status: 'POSTED' }));
     expect((await close().expect(200)).body.closedAt).toBe(closed.body.closedAt);
+    await request(app).post(`${path}/cancel`).set(admin).send({ settlementId: closed.body.id }).expect(409);
     await pay(null, '1').expect(404);
     expect(await db.auditLog.count({ where: { societyId, entityId: member.id, action: 'MEMBER_SETTLEMENT_COMPLETED' } })).toBe(1);
 
@@ -505,6 +506,59 @@ describe('Phase 2 financial workflow', () => {
     expect(secondPage.items).toEqual(period.items.slice(2, 4));
     const olderPage = (await statement().query({ pageSize: 3, page: 3 }).expect(200)).body;
     expect(olderPage.items).toEqual(full.items.slice(6));
+  });
+
+  it('cancels a settlement, releases regular transactions and preserves posted payments', async () => {
+    const admin = headers('SOCIETY_ADMIN');
+    const accountant = headers('ACCOUNTANT');
+    const member = await db.member.create({ data: {
+      societyId, memberNo: `CANCEL-${tag}`, fullName: 'Settlement Cancellation Member', phone: '01700000000',
+      address: 'Dhaka', joinedAt: new Date('2026-01-01'),
+    } });
+    const account = await request(app).post('/api/finance/accounts').set(admin)
+      .send({ code: 'CANCEL-SETTLEMENT', name: 'Settlement cancellation cash', kind: 'CASH' }).expect(201);
+    const path = `/api/members/${member.id}/settlement`;
+    const fields = { cashAccountId: account.body.id, effectiveDate: '2026-11-09' };
+    const deposit = (amount: string) => request(app).post('/api/finance/transactions').set(accountant)
+      .set('Idempotency-Key', randomUUID()).send({ ...fields, type: 'DEPOSIT', memberId: member.id, amount });
+    const pay = (settlementId: string, amount: string) => request(app).post(`${path}/payments`).set(accountant)
+      .set('Idempotency-Key', randomUUID()).send({ ...fields, settlementId, amount });
+    const cancel = (settlementId: string) => request(app).post(`${path}/cancel`).set(admin).send({ settlementId });
+    const start = () => request(app).post(path).set(admin).expect(200);
+
+    const opening = await deposit('200').expect(201);
+    expect((await approve(opening.body.id)).status).toBe(200);
+    const first = (await start()).body;
+    await deposit('1').expect(409);
+    const posted = await pay(first.id, '10').expect(201);
+    expect((await approve(posted.body.id)).status).toBe(200);
+    const pending = await pay(first.id, '20').expect(201);
+    await request(app).post(`${path}/cancel`).set(accountant).send({ settlementId: first.id }).expect(403);
+    await request(app).post(`${path}/cancel`).set(headers('SUPER_ADMIN', otherSocietyId)).send({ settlementId: first.id }).expect(404);
+    const cancelled = (await cancel(first.id).expect(200)).body;
+    expect(cancelled).toMatchObject({ id: null, status: 'NOT_STARTED', pendingTransactions: 0, lines: [{ due: '190.00' }] });
+    expect((await approve(pending.body.id)).status).toBe(409);
+    expect(await db.financialTransaction.findUniqueOrThrow({ where: { id: pending.body.id } })).toMatchObject({ status: 'CANCELLED', settlementId: first.id });
+    expect(await db.financialTransaction.findUniqueOrThrow({ where: { id: posted.body.id } })).toMatchObject({ status: 'POSTED', settlementId: first.id });
+    expect(await db.member.findUniqueOrThrow({ where: { id: member.id } })).toMatchObject({ status: 'ACTIVE' });
+
+    const newDeposit = await deposit('5').expect(201);
+    expect((await approve(newDeposit.body.id)).status).toBe(200);
+    const second = (await start()).body;
+    expect(second).toMatchObject({ status: 'OPEN', lines: [{ due: '195.00' }] });
+    expect(second.id).not.toBe(first.id);
+    expect((await cancel(first.id).expect(200)).body.id).toBe(second.id);
+    await pay(first.id, '5').expect(409);
+    await request(app).post(`${path}/close`).set(admin).send({ settlementId: first.id }).expect(409);
+    const reversePosted = () => request(app).post(`/api/finance/transactions/${posted.body.id}/reversal`).set(accountant)
+      .set('Idempotency-Key', randomUUID()).send({ effectiveDate: fields.effectiveDate, note: 'Correct paid refund' });
+    await reversePosted().expect(409);
+    await cancel(second.id).expect(200);
+    await reversePosted().expect(201);
+    const records = await db.memberSettlement.findMany({ where: { societyId, memberId: member.id } });
+    expect(records).toHaveLength(2);
+    expect(records.every(record => record.cancelledAt && record.isCurrent === null)).toBe(true);
+    expect(await db.auditLog.count({ where: { societyId, entityId: member.id, action: 'MEMBER_SETTLEMENT_CANCELLED' } })).toBe(2);
   });
 
   it('limits rejected transaction deletion to admins and retains the complete audit history', async () => {

@@ -14,3 +14,4 @@ memberRouter.get('/:id/settlement/statement', requirePermission('finance.read'),
 memberRouter.post('/:id/settlement', requirePermission('members.archive'), controller.startSettlement);
 memberRouter.post('/:id/settlement/payments', requirePermission('finance.write'), controller.recordSettlementPayment);
 memberRouter.post('/:id/settlement/close', requirePermission('members.archive'), controller.closeSettlement);
+memberRouter.post('/:id/settlement/cancel', requirePermission('members.archive'), controller.cancelSettlement);

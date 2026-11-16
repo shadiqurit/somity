@@ -206,6 +206,7 @@ export async function submitSettlementPayment(societyId: string, actorId: string
     if (prior) return prior;
     const settlement = await findSettlement(tx, societyId, memberId);
     if (!settlement || settlement.closedAt) throw new AppError(404, 'Open member settlement not found');
+    if (input.settlementId && settlement.id !== input.settlementId) throw new AppError(409, 'The settlement changed. Refresh the member profile and try again.');
     await assertSettlementPayment(tx, settlement, input.loanId, amount);
     await requireCashAccount(tx, societyId, input.cashAccountId);
     if (input.loanId) {
@@ -228,8 +229,11 @@ export async function requestReversal(societyId: string, actorId: string, id: st
     const original = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } }, include: { member: { select: { status: true } } } });
     if (!original || original.deletedAt) throw new AppError(404, 'Transaction not found');
     if (original.member?.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
-    if (original.memberId && !original.settlementId && await findSettlement(tx, societyId, original.memberId)) {
-      throw new AppError(409, 'Historical transactions cannot be reversed during final settlement');
+    if (original.memberId) {
+      const settlement = await findSettlement(tx, societyId, original.memberId);
+      if (settlement && original.settlementId !== settlement.id) {
+        throw new AppError(409, 'Historical transactions cannot be reversed during final settlement');
+      }
     }
     if (original.status !== 'POSTED' || original.type === 'REVERSAL') throw new AppError(409, 'Only an original posted transaction can be reversed');
     if (new Date(input.effectiveDate) < original.effectiveDate) throw new AppError(422, 'Reversal date cannot precede the original transaction');

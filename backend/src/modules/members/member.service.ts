@@ -85,10 +85,11 @@ export async function startSettlement(societyId: string, memberId: string, actor
   return settlement(societyId, memberId);
 }
 
-export async function closeSettlement(societyId: string, memberId: string, actorId: string) {
+export async function closeSettlement(societyId: string, memberId: string, actorId: string, settlementId?: string) {
   await db.$transaction(async tx => {
     await lockActiveSociety(tx, societyId);
     const record = await findSettlement(tx, societyId, memberId);
+    if (settlementId && record?.id !== settlementId) throw new AppError(409, 'The settlement changed. Refresh the member profile and try again.');
     if (!record) throw new AppError(404, 'Member settlement not found');
     if (record.closedAt) return;
     await assertMemberSettled(tx, societyId, memberId);
@@ -100,6 +101,28 @@ export async function closeSettlement(societyId: string, memberId: string, actor
     await disableMemberLogin(tx, societyId, member.userId);
     await completeSettlement(tx, societyId, memberId, actorId);
     await audit(tx, actorId, 'MEMBER_CLOSED', 'member', memberId, { settlementId: record.id }, societyId);
+  });
+  return settlement(societyId, memberId);
+}
+
+export async function cancelSettlement(societyId: string, memberId: string, actorId: string, settlementId: string) {
+  await db.$transaction(async tx => {
+    await lockActiveSociety(tx, societyId);
+    const record = await tx.memberSettlement.findUnique({
+      where: { societyId_memberId_id: { societyId, memberId, id: settlementId } },
+    });
+    if (!record) throw new AppError(404, 'Member settlement not found');
+    if (record.closedAt) throw new AppError(409, 'The membership is already closed');
+    if (record.cancelledAt) return;
+
+    const pending = { societyId, memberId, settlementId, status: 'PENDING' as const };
+    const requests = await tx.financialTransaction.findMany({ where: pending, select: { id: true } });
+    await tx.financialTransaction.updateMany({ where: pending, data: { status: 'CANCELLED' } });
+    for (const { id } of requests) {
+      await audit(tx, actorId, 'FINANCE_CANCELLED', 'transaction', id, { settlementId, reason: 'Member settlement cancelled' }, societyId);
+    }
+    await tx.memberSettlement.update({ where: { id: settlementId }, data: { cancelledAt: new Date(), isCurrent: null } });
+    await audit(tx, actorId, 'MEMBER_SETTLEMENT_CANCELLED', 'member', memberId, { settlementId, cancelledRequests: requests.length }, societyId);
   });
   return settlement(societyId, memberId);
 }

@@ -242,7 +242,25 @@ test('cash account, deposit request, approval, ledger and private member stateme
   const settlement = page.getByRole('region', { name: 'Final settlement' });
   await expect(settlement.getByRole('listitem').filter({ hasText: 'Somity pays member' })).toContainText('৳ 1,500.25');
   await expect(settlement.getByRole('listitem').filter({ hasText: 'Member pays Somity' })).toContainText('৳ 80.01');
-  await settlement.getByRole('button', { name: 'Start final settlement' }).click();
+  const startButton = settlement.getByRole('button', { name: 'Start final settlement' });
+  const startDialog = page.getByRole('dialog', { name: 'Start final settlement?' });
+  await startButton.click();
+  await startDialog.getByRole('button', { name: 'Go back' }).click();
+  await page.reload();
+  await expect(startButton).toBeVisible();
+  await expect(settlement.getByRole('button', { name: 'Record repayment' })).toHaveCount(0);
+
+  async function confirmStart() {
+    await startButton.click();
+    await startDialog.getByRole('button', { name: 'Confirm start' }).click();
+    await expect(startDialog).not.toBeVisible();
+  }
+
+  await confirmStart();
+  await settlement.getByRole('button', { name: 'Cancel final settlement' }).click();
+  await page.getByRole('dialog', { name: 'Cancel this settlement?' }).getByRole('button', { name: 'Confirm cancellation' }).click();
+  await expect(settlement.getByText('Settlement cancelled. Regular member transactions can resume.')).toBeVisible();
+  await confirmStart();
 
   async function recordSettlementPayment(button: string, dialogName: string, amount: string, reference: string) {
     await settlement.getByRole('button', { name: button, exact: true }).click();
@@ -262,8 +280,13 @@ test('cash account, deposit request, approval, ledger and private member stateme
 
   await recordSettlementPayment('Record repayment', 'Record loan repayment', '80.01', 'Final loan receipt');
   await recordSettlementPayment('Record refund', 'Record savings refund', '1500.25', 'Final savings payout');
-  await settlement.getByRole('button', { name: 'Close membership' }).click();
-  await page.getByRole('dialog', { name: 'Close this membership?' }).getByRole('button', { name: 'Close membership' }).click();
+  const closeButton = settlement.getByRole('button', { name: 'Close membership' });
+  const closeDialog = page.getByRole('dialog', { name: 'Close this membership?' });
+  await closeButton.click();
+  await closeDialog.getByRole('button', { name: 'Go back' }).click();
+  await expect(closeButton).toBeVisible();
+  await closeButton.click();
+  await closeDialog.getByRole('button', { name: 'Close membership' }).click();
   await expect(page.getByText('Final settlement completed and membership closed.', { exact: true })).toBeVisible();
   await page.reload();
   await expect(settlement.getByText(/Membership closed on/)).toBeVisible();

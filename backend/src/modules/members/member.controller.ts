@@ -4,7 +4,7 @@ import { canViewMember } from '../../middleware/auth.js';
 import { auditView } from '../../services/audit.js';
 import { submitSettlementPayment } from '../finance/finance.service.js';
 import { memberDuesStatement } from '../finance/finance.member-statement.js';
-import { idSchema, keySchema, settlementPaymentSchema, statementListSchema } from '../finance/finance.validator.js';
+import { idSchema, keySchema, settlementPaymentSchema, settlementReferenceSchema, statementListSchema } from '../finance/finance.validator.js';
 import * as service from './member.service.js';
 import { archiveSchema, listSchema, memberLoginSchema, memberSchema, updateMemberSchema } from './member.validator.js';
 export async function list(req: Request, res: Response) { res.json(await service.list(listSchema.parse(req.query), req.societyId)); }
@@ -57,5 +57,11 @@ export async function recordSettlementPayment(req: Request, res: Response) {
 }
 
 export async function closeSettlement(req: Request, res: Response) {
-  res.json(await service.closeSettlement(req.societyId, idSchema.parse(req.params.id), req.user.id));
+  const { settlementId } = settlementReferenceSchema.partial().parse(req.body ?? {});
+  res.json(await service.closeSettlement(req.societyId, idSchema.parse(req.params.id), req.user.id, settlementId));
+}
+
+export async function cancelSettlement(req: Request, res: Response) {
+  const { settlementId } = settlementReferenceSchema.parse(req.body);
+  res.json(await service.cancelSettlement(req.societyId, idSchema.parse(req.params.id), req.user.id, settlementId));
 }

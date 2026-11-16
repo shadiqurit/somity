@@ -121,7 +121,7 @@ model Member {
   transactions FinancialTransaction[]
   ledgerEntries LedgerEntry[]
   loans Loan[]
-  settlement MemberSettlement?
+  settlements MemberSettlement[]
 
   @@unique([societyId, id])
   @@unique([societyId, memberNo])
@@ -334,10 +334,12 @@ model MemberSettlement {
   dues Json
   openedAt DateTime @default(now()) @db.DateTime(3)
   closedAt DateTime? @db.DateTime(3)
+  cancelledAt DateTime? @db.DateTime(3)
+  isCurrent Boolean? @default(true)
   member Member @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict, onUpdate: Restrict)
   transactions FinancialTransaction[]
 
-  @@unique([societyId, memberId], map: "member_settlements_member_key")
+  @@unique([societyId, memberId, isCurrent], map: "member_settlements_current_key")
   @@unique([societyId, memberId, id], map: "member_settlements_scope_key")
   @@map("member_settlements")
 }

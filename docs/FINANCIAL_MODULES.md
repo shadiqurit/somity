@@ -30,12 +30,14 @@ The Bank dashboard combines cash and bank accounts. Its incoming and outgoing to
 ## Member final settlement
 
 1. On the member profile, open **Final settlement** and review savings due from Somity and principal due from the member on each loan. Resolve any pending member transactions before starting.
-2. Select **Start final settlement**. This captures the current posted dues and directs subsequent payments for that membership through the settlement. Existing historical transactions remain in the ledger.
+2. Select **Start final settlement**, then **Confirm start** to capture current posted dues and direct subsequent payments through the settlement. **Go back** dismisses the confirmation and leaves regular member transactions available.
 3. Use **Record repayment** for each loan and **Record refund** for the savings owed. Select the actual cash or bank account and enter the date, amount and any receipt reference. Payments in the two directions are recorded separately. Partial payments are supported, and pending payments reserve their amount until decided.
 4. Review the requests in **Approvals** under the existing society policy. Only posted payments count as paid. A posted reversal restores the corresponding amount due while the settlement is open. A refund still requires sufficient funds in the selected account.
-5. Refresh the settlement. Once savings and all loan balances are zero and every request is resolved, select **Close membership**. Closing ends the member's portal access and stores the completed settlement with its payment history.
+5. Refresh the settlement. Once savings and all loan balances are zero and every request is resolved, select and confirm **Close membership**. **Go back** returns to the open settlement. Confirming closure ends the member's portal access and stores the completed settlement with its payment history.
 
-Super Admin and the assigned Society Admin can start or close a settlement. Finance staff can read it. Recording and approving payments use the existing finance permissions. Apply migration `202611170005_member_settlement` before starting the updated API.
+To return to regular member transactions before closure, select **Cancel final settlement** and confirm. Pending requests from that settlement are cancelled. Posted payments stay in the ledger, and a later settlement starts from the current balances.
+
+Super Admin and the assigned Society Admin can start, cancel or close a settlement. Finance staff can read it. Recording and approving payments use the existing finance permissions. Apply the settlement migrations, through `202611170006_member_settlement_cancellation`, before starting the updated API.
 
 Use **View dues statement** in the profile to see posted savings and loan transactions before and after settlement. The date filter shows opening balances, movements in the period and closing balances for both sides. Each row shows the amount paid by each party, the account, reference and both running balances immediately after posting in effective-date order. Reversals appear as opposite movements and identify the original transaction. In the Bangla interface, open **দেনা–পাওনার হিসাব দেখুন**.
 

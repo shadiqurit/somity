@@ -49,7 +49,7 @@ export async function memberDues(tx: Tx, societyId: string, memberId: string): P
 }
 
 export function findSettlement(tx: Tx, societyId: string, memberId: string) {
-  return tx.memberSettlement.findUnique({ where: { societyId_memberId: { societyId, memberId } } });
+  return tx.memberSettlement.findUnique({ where: { societyId_memberId_isCurrent: { societyId, memberId, isCurrent: true } } });
 }
 
 const paymentFields = {
@@ -102,6 +102,7 @@ export async function describeSettlement(tx: Tx, societyId: string, memberId: st
   ]);
   const lines = settlementLines(dues, payments);
   return {
+    id: settlement?.id ?? null,
     status: member.status === 'CLOSED' ? 'CLOSED' : settlement ? 'OPEN' : 'NOT_STARTED',
     openedAt: settlement?.openedAt ?? null,
     closedAt: settlement?.closedAt ?? null,
