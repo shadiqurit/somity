@@ -28,6 +28,9 @@ All routes below require authentication, a changed initial password and an activ
 | POST `/finance/transactions/:id/reversal` | finance.write | effectiveDate and reason in note (5–500 characters); requires a fresh `Idempotency-Key`. Requests full opposite posting after approval. |
 | GET `/finance/ledger` | finance.read | Paginated posted debit/credit lines; optional memberId/from/to. |
 | GET `/finance/summary` | finance.read | Savings in/out for optional from/to, approved savings through to, and count of all pending requests. |
+| GET `/finance/loan-summary` | finance.read | Society-wide loan principal disbursed, repaid, and outstanding after posted reversals, plus the number of pending loan requests. |
+| GET `/finance/investment-summary` | finance.read | Society-wide principal invested, returned, and outstanding, plus realized profit after posted reversals. |
+| GET `/finance/expense-summary` | finance.read | Approved expenses, expense reversals, net expenses, and pending expense requests. Optional `from` and `to` filter by effective date. |
 | GET `/finance/statements/:memberId` | finance.read | Approved movements, opening/closing/running balances; optional from/to/page/pageSize. Archived members' financial history remains available to staff. |
 | GET `/finance/statements/me` | profile.read | Identical statement restricted to the caller's linked member. Cannot select another member. |
 

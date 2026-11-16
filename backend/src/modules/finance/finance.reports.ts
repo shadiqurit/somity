@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, type FinancialTransactionType } from '@prisma/client';
 import { db } from '../../config/database.js';
 import { AppError } from '../../utils/errors.js';
 import { principalSchedule } from './finance.posting.js';
@@ -6,6 +6,9 @@ import { todayDhaka, type FinanceListInput } from './finance.validator.js';
 type Tx = Prisma.TransactionClient;
 const zero = () => new Prisma.Decimal(0);
 const range = (input: { from?: string; to?: string }) => ({ ...(input.from ? { gte: new Date(input.from) } : {}), ...(input.to ? { lte: new Date(input.to) } : {}) });
+const movements = (type: FinancialTransactionType): Prisma.FinancialTransactionWhereInput => ({
+  OR: [{ type }, { type: 'REVERSAL', reversalOf: { type } }],
+});
 async function productBalance(tx: Tx, societyId: string, kind: 'LOAN_RECEIVABLE' | 'INVESTMENT_ASSET' | 'INVESTMENT_INCOME' | 'OTHER_INCOME', scope: Prisma.FinancialTransactionWhereInput) {
   const totals = await tx.ledgerEntry.aggregate({ where: { societyId, account: { kind }, transaction: { ...scope, status: 'POSTED' } }, _sum: { debit: true, credit: true } });
   const debit = totals._sum.debit ?? zero(); const credit = totals._sum.credit ?? zero();
@@ -33,6 +36,27 @@ export async function loans(societyId: string, input: FinanceListInput, ownMembe
     return detailId ? items[0]! : { items, total, page: input.page, pageSize: input.pageSize, pages: Math.ceil(total / input.pageSize) };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
+
+export async function loanSummary(societyId: string) {
+  return db.$transaction(async tx => {
+    const [disbursed, repaymentBalance, pending] = await Promise.all([
+      productBalance(tx, societyId, 'LOAN_RECEIVABLE', movements('LOAN_DISBURSEMENT')),
+      productBalance(tx, societyId, 'LOAN_RECEIVABLE', movements('LOAN_REPAYMENT')),
+      tx.financialTransaction.count({ where: {
+        societyId, status: 'PENDING',
+        OR: [{ type: { in: ['LOAN_DISBURSEMENT', 'LOAN_REPAYMENT'] } }, { type: 'REVERSAL', loanId: { not: null } }],
+      } }),
+    ]);
+    const repaid = zero().minus(repaymentBalance);
+    return {
+      disbursed: disbursed.toFixed(2),
+      repaid: repaid.toFixed(2),
+      outstanding: disbursed.minus(repaid).toFixed(2),
+      pending,
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
 export async function investments(societyId: string, input: FinanceListInput, detailId?: string) {
   return db.$transaction(async tx => {
     const where = { societyId, ...(detailId ? { id: detailId } : {}) };
@@ -49,6 +73,46 @@ export async function investments(societyId: string, input: FinanceListInput, de
     return detailId ? items[0]! : { items, total, page: input.page, pageSize: input.pageSize, pages: Math.ceil(total / input.pageSize) };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
+
+export async function investmentSummary(societyId: string) {
+  return db.$transaction(async tx => {
+    const [invested, outstanding, profit] = await Promise.all([
+      productBalance(tx, societyId, 'INVESTMENT_ASSET', movements('INVESTMENT_PURCHASE')),
+      productBalance(tx, societyId, 'INVESTMENT_ASSET', {}),
+      productBalance(tx, societyId, 'INVESTMENT_INCOME', {}),
+    ]);
+    return {
+      invested: invested.toFixed(2),
+      principalReturned: invested.minus(outstanding).toFixed(2),
+      outstanding: outstanding.toFixed(2),
+      profit: profit.toFixed(2),
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+function expenseLedgerTotals(tx: Tx, societyId: string, effectiveDate: ReturnType<typeof range>) {
+  return tx.ledgerEntry.aggregate({
+    where: { societyId, account: { kind: 'EXPENSE' }, transaction: { status: 'POSTED', effectiveDate } },
+    _sum: { debit: true, credit: true },
+  });
+}
+
+export async function expenseSummary(societyId: string, input: { from?: string; to?: string }) {
+  const effectiveDate = range(input);
+  return db.$transaction(async tx => {
+    const [totals, pending] = await Promise.all([
+      expenseLedgerTotals(tx, societyId, effectiveDate),
+      tx.financialTransaction.count({ where: {
+        societyId, effectiveDate, status: 'PENDING',
+        OR: [{ type: 'EXPENSE' }, { type: 'REVERSAL', reversalOf: { type: 'EXPENSE' } }],
+      } }),
+    ]);
+    const gross = totals._sum.debit ?? zero();
+    const reversals = totals._sum.credit ?? zero();
+    return { gross: gross.toFixed(2), reversals: reversals.toFixed(2), net: gross.minus(reversals).toFixed(2), pending };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
 export async function bankSummary(societyId: string, input: { from?: string; to?: string }) {
   return db.$transaction(async tx => {
     const accounts = await tx.ledgerAccount.findMany({ where: { societyId, kind: { in: ['CASH', 'BANK'] } }, orderBy: { code: 'asc' } });
@@ -59,7 +123,7 @@ export async function bankSummary(societyId: string, input: { from?: string; to?
       const opening = (before._sum.debit ?? zero()).minus(before._sum.credit ?? zero()); const incoming = totals._sum.debit ?? zero(); const outgoing = totals._sum.credit ?? zero();
       return { ...account, opening: opening.toFixed(2), deposits: incoming.toFixed(2), withdrawals: outgoing.toFixed(2), closing: opening.plus(incoming).minus(outgoing).toFixed(2) };
     }));
-    const expenses = await tx.ledgerEntry.aggregate({ where: { societyId, account: { kind: 'EXPENSE' }, transaction: { status: 'POSTED', effectiveDate: range(input) } }, _sum: { debit: true, credit: true } });
+    const expenses = await expenseLedgerTotals(tx, societyId, range(input));
     return { items, expenses: (expenses._sum.debit ?? zero()).minus(expenses._sum.credit ?? zero()).toFixed(2) };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }

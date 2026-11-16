@@ -58,6 +58,9 @@ export const investments: RequestHandler = async (req, res) => {
   if (investmentId) await auditView(req.user.id, req.societyId, 'FINANCE_INVESTMENT_VIEWED', 'investment', investmentId);
   res.json(investments);
 };
+export const loanSummary: RequestHandler = async (req, res) => { res.json(await reports.loanSummary(req.societyId)); };
+export const investmentSummary: RequestHandler = async (req, res) => { res.json(await reports.investmentSummary(req.societyId)); };
 export const bankSummary: RequestHandler = async (req, res) => { res.json(await reports.bankSummary(req.societyId, dateRangeSchema.parse(req.query))); };
+export const expenseSummary: RequestHandler = async (req, res) => { res.json(await reports.expenseSummary(req.societyId, dateRangeSchema.parse(req.query))); };
 export const incomeSummary: RequestHandler = async (req, res) => { res.json(await reports.incomeSummary(req.societyId, dateRangeSchema.parse(req.query))); };
 

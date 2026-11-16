@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { Plus, Wallet, Landmark, ClipboardCheck, ArrowDownUp, Settings } from 'lucide-vue-next';
+import { Plus, Wallet, Landmark, ClipboardCheck, ArrowDownUp, ArrowUpRight, Settings } from 'lucide-vue-next';
 import { api, errorMessage } from '../../services/api';
 import { useAuthStore } from '../../stores/auth';
 import { useLocale } from '../../composables/useLocale';
 import { date } from '../../utils/format';
 import ProductReports from './ProductReports.vue';
 import TransactionLog from './TransactionLog.vue';
-import { bdt, todayDhaka, type Account, type FinancialTransaction, type FinanceSummary, type IncomeSummary, type LedgerLine, type Policy } from './types';
+import { bdt, todayDhaka, type Account, type FinancialTransaction, type FinanceSummary, type IncomeSummary, type LoanSummary, type InvestmentSummary, type ExpenseSummary, type LedgerLine, type Policy } from './types';
 import AppButton from '../../components/ui/AppButton.vue';
 import AppInput from '../../components/ui/AppInput.vue';
 import AppSelect from '../../components/ui/AppSelect.vue';
@@ -38,7 +38,10 @@ const props = defineProps<{ section?: Section }>();
 const { t } = useLocale();
 const section = computed(() => props.section ?? 'finance');
 const incomeSummary = ref<IncomeSummary>();
-const reportRevision = ref(0); const expenseTotal = ref('0.00');
+const loanSummary = ref<LoanSummary>();
+const investmentSummary = ref<InvestmentSummary>();
+const expenseSummary = ref<ExpenseSummary>();
+const reportRevision = ref(0);
 const entryOptions = computed(() => entryTypes[section.value].map(value => ({
   value,
   label: t(section.value === 'income' && value === 'INVESTMENT_RETURN' ? 'Investment profit' : transactionLabels[value]),
@@ -51,6 +54,9 @@ const productOptions = ref<{label:string;value:string}[]>([]);
 let entryPreset: EntryPreset | undefined;
 const auth = useAuthStore(); const error = ref(''); const notice = ref(''); const loading = ref(false); const busy = ref(false); const actionError = ref('');
 type FinanceTab = Exclude<Section, 'finance' | 'approvals'> | 'transactions' | 'ledger' | 'accounts' | 'log';
+const summaryEndpoints: Partial<Record<FinanceTab, string>> = {
+  loans: '/finance/loan-summary', investments: '/finance/investment-summary', income: '/finance/income-summary', expenses: '/finance/expense-summary',
+};
 const tab = ref<FinanceTab>(!props.section || props.section === 'finance' || props.section === 'approvals' ? 'transactions' : props.section);
 const summary = ref<FinanceSummary>(); const accounts = ref<Account[]>([]); const policy = ref<Policy>();
 const rows = ref<FinancialTransaction[]>([]); const ledgerRows = ref<LedgerLine[]>([]); const page = ref(1); const pages = ref(1); const total = ref(0);
@@ -80,20 +86,23 @@ async function load(value = 1) {
   const range = { from: from.value || undefined, to: to.value || undefined };
   const params = { ...range, page: value, pageSize: 20, status: status.value || undefined, type: requestedTab === 'expenses' ? 'EXPENSE' : type.value || undefined, scope: requestedTab === 'income' ? 'income' : undefined };
   try {
-    const [s, a, p, records, expenses] = await Promise.all([
-      requestedTab === 'income' ? api.get('/finance/income-summary', { params: range }) : api.get('/finance/summary', { params: range }),
+    const [s, a, p, records] = await Promise.all([
+      api.get(summaryEndpoints[requestedTab] ?? '/finance/summary', { params: range }),
       api.get('/finance/accounts'),
       api.get('/finance/policy'),
-      api.get(requestedTab === 'ledger' ? '/finance/ledger' : '/finance/transactions', { params }),
-      requestedTab === 'expenses' ? api.get('/finance/bank-summary', { params: range }) : undefined,
+      requestedTab === 'loans' || requestedTab === 'investments' ? undefined : api.get(requestedTab === 'ledger' ? '/finance/ledger' : '/finance/transactions', { params }),
     ]);
     if (sequence !== loadSequence) return;
-    if (requestedTab === 'income') incomeSummary.value = s.data;
+    if (requestedTab === 'loans') loanSummary.value = s.data;
+    else if (requestedTab === 'investments') investmentSummary.value = s.data;
+    else if (requestedTab === 'income') incomeSummary.value = s.data;
+    else if (requestedTab === 'expenses') expenseSummary.value = s.data;
     else summary.value = s.data;
     accounts.value = a.data; policy.value = p.data; reportRevision.value++;
-    if (expenses) expenseTotal.value = expenses.data.expenses;
-    if (requestedTab === 'ledger') ledgerRows.value = records.data.items; else rows.value = records.data.items;
-    pages.value = records.data.pages; total.value = records.data.total;
+    if (records) {
+      if (requestedTab === 'ledger') ledgerRows.value = records.data.items; else rows.value = records.data.items;
+      pages.value = records.data.pages; total.value = records.data.total;
+    }
   } catch (e) { if (sequence === loadSequence) error.value = errorMessage(e); } finally { if (sequence === loadSequence) loading.value = false; }
 }
 watch(tab, current => { if (current !== 'log') void load(); });
@@ -245,6 +254,9 @@ onMounted(() => load());
     <div>
       <h1>{{ t(section.charAt(0).toUpperCase() + section.slice(1)) }}<span class="heading-dot">.</span></h1>
       <p v-if="section === 'income'">Other income and investment profit for {{ auth.user?.society?.name }}.</p>
+      <p v-else-if="section === 'loans'">Loan balances and repayments for {{ auth.user?.society?.name }}.</p>
+      <p v-else-if="section === 'investments'">Investment principal and returns for {{ auth.user?.society?.name }}.</p>
+      <p v-else-if="section === 'expenses'">Expense records for {{ auth.user?.society?.name }}.</p>
       <p v-else>Financial records for {{ auth.user?.society?.name }}.</p>
     </div>
     <div class="button-row">
@@ -253,10 +265,28 @@ onMounted(() => load());
     </div>
   </div>
   <div v-if="notice" class="alert success" role="status">{{ notice }}</div><div v-if="error" class="alert error" role="alert">{{ error }} <AppButton variant="ghost" @click="load()">Retry</AppButton></div>
+  <section v-if="loanSummary" class="summary-grid finance-summary" aria-label="Loan summary">
+    <SummaryCard label="Total disbursed" :value="bdt(loanSummary.disbursed)" detail="Approved principal after reversals"><Landmark :size="20" /></SummaryCard>
+    <SummaryCard label="Total repaid" :value="bdt(loanSummary.repaid)" detail="Approved repayments after reversals"><ArrowDownUp :size="20" /></SummaryCard>
+    <SummaryCard label="Outstanding principal" :value="bdt(loanSummary.outstanding)" detail="Principal remaining across all loans"><Wallet :size="20" /></SummaryCard>
+    <SummaryCard label="Pending loan requests" :value="loanSummary.pending" detail="Disbursements, repayments, and reversals"><ClipboardCheck :size="20" /></SummaryCard>
+  </section>
+  <section v-if="investmentSummary" class="summary-grid finance-summary" aria-label="Investment summary">
+    <SummaryCard label="Total invested" :value="bdt(investmentSummary.invested)" detail="Approved purchases after reversals"><Landmark :size="20" /></SummaryCard>
+    <SummaryCard label="Principal returned" :value="bdt(investmentSummary.principalReturned)" detail="Invested capital recovered"><ArrowDownUp :size="20" /></SummaryCard>
+    <SummaryCard label="Outstanding principal" :value="bdt(investmentSummary.outstanding)" detail="Capital still invested"><Wallet :size="20" /></SummaryCard>
+    <SummaryCard label="Realized profit" :value="bdt(investmentSummary.profit)" detail="Posted profit after reversals"><ArrowUpRight :size="20" /></SummaryCard>
+  </section>
   <section v-if="incomeSummary" class="summary-grid finance-summary income-summary" aria-label="Approved income in the selected period">
     <SummaryCard :label="t('Total income')" :value="bdt(incomeSummary.total)" detail="Net approved income in this period"><Wallet :size="20" /></SummaryCard>
     <SummaryCard :label="t('Other income')" :value="bdt(incomeSummary.otherIncome)" detail="Net approved other income"><Landmark :size="20" /></SummaryCard>
     <SummaryCard :label="t('Investment profit')" :value="bdt(incomeSummary.investmentProfit)" detail="Net approved investment profit"><ArrowDownUp :size="20" /></SummaryCard>
+  </section>
+  <section v-if="expenseSummary" class="summary-grid finance-summary" aria-label="Expense summary">
+    <SummaryCard label="Net approved expenses" :value="bdt(expenseSummary.net)" detail="Approved expenses minus reversals"><Wallet :size="20" /></SummaryCard>
+    <SummaryCard label="Approved expenses" :value="bdt(expenseSummary.gross)" detail="Before reversals"><Landmark :size="20" /></SummaryCard>
+    <SummaryCard label="Approved reversals" :value="bdt(expenseSummary.reversals)" detail="Expense amounts reversed"><ArrowDownUp :size="20" /></SummaryCard>
+    <SummaryCard label="Pending expense requests" :value="expenseSummary.pending" detail="Expense and reversal requests awaiting approval"><ClipboardCheck :size="20" /></SummaryCard>
   </section>
   <section v-if="summary" class="summary-grid finance-summary" aria-label="Financial summary"><SummaryCard label="Member savings" :value="bdt(summary.memberSavings)" detail="Approved balance at end date"><Wallet :size="20" /></SummaryCard><SummaryCard label="Savings in" :value="bdt(summary.deposits)" detail="Period increases, including reversals"><ArrowDownUp :size="20" /></SummaryCard><SummaryCard label="Savings out" :value="bdt(summary.withdrawals)" detail="Period decreases, including reversals"><Landmark :size="20" /></SummaryCard><SummaryCard label="Awaiting approval" :value="summary.pending" detail="All pending requests"><ClipboardCheck :size="20" /></SummaryCard></section>
   <section v-if="['transactions','ledger','accounts','income','expenses','log'].includes(tab)" class="panel directory">
@@ -297,7 +327,7 @@ onMounted(() => load());
     </AppTable>
     <AppTable v-else-if="tab === 'ledger'" :rows="ledgerRows" :columns="ledgerColumns" :page="page" :pages="pages" :total="total" :loading="loading" @page="load"><template #cell-effectiveDate="{ row }">{{ date(row.transaction.effectiveDate) }}</template><template #cell-transaction="{ row }"><strong>{{ row.transaction.transactionNo }}</strong><small class="finance-cell-note">{{ row.member?.fullName || 'Society' }} · {{ row.transaction.type }}</small></template><template #cell-account="{ row }">{{ row.account.name }}<small class="finance-cell-note">{{ row.account.code }}</small></template><template #cell-debit="{ row }">{{ bdt(row.debit) }}</template><template #cell-credit="{ row }">{{ bdt(row.credit) }}</template><template #empty>No posted ledger entries in this period.</template></AppTable>
     <template v-else><div class="panel-heading"><div><h2>Cash & bank accounts</h2><p>Balances come from approved ledger entries.</p></div><AppButton v-if="auth.can('finance.settings')" @click="openAccount"><Plus :size="18" /> Add account</AppButton></div><AppTable :rows="accounts" :columns="accountColumns" :loading="loading"><template #cell-name="{ row }"><strong>{{ row.name }}</strong><small v-if="row.bankName" class="finance-cell-note">{{ row.bankName }} {{ row.accountNumberLast4 ? `· ending ${row.accountNumberLast4}` : '' }}</small></template><template #cell-balance="{ row }">{{ bdt(row.balance) }}</template><template #empty>Add your first cash or bank account to start recording transactions.</template></AppTable></template>
-  </section><ProductReports v-if="tab === 'loans' || tab === 'investments' || tab === 'bank'" :kind="tab" :refresh="reportRevision" @entry="openEntry" /><div v-if="tab === 'expenses'" class="alert success">Net approved expenses in this period: {{ bdt(expenseTotal) }}</div><p class="under-table-note">Balances update after final approval. To correct a posted transaction, request a reversal and submit a new entry.</p>
+  </section><ProductReports v-if="tab === 'loans' || tab === 'investments' || tab === 'bank'" :kind="tab" :refresh="reportRevision" @entry="openEntry" /><p class="under-table-note">Balances update after final approval. To correct a posted transaction, request a reversal and submit a new entry.</p>
 
   <AppModal :open="entryOpen" title="New transaction" description="The ledger updates after final approval." :busy="busy" @close="entryOpen = false">
     <AppForm :busy="busy" :error="actionError" @submit="saveEntry">

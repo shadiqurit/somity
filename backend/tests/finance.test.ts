@@ -212,22 +212,39 @@ describe('Phase 2 financial workflow', () => {
   });
   it('posts loans, installments, investment principal/profit, expenses and bank transfers through approval', async () => {
     const send = async (data: Record<string, unknown>) => request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID()).send({ effectiveDate: '2026-11-09', cashAccountId: cashId, ...data }).expect(201);
+    const loanSummary = async (sid = societyId) => (await request(app).get('/api/finance/loan-summary').set(headers('ADMIN', sid)).expect(200)).body;
+    const investmentSummary = async (sid = societyId) => (await request(app).get('/api/finance/investment-summary').set(headers('ADMIN', sid)).expect(200)).body;
+    const expenseSummary = async (query: { from?: string; to?: string } = {}, sid = societyId) =>
+      (await request(app).get('/api/finance/expense-summary').set(headers('ADMIN', sid)).query(query).expect(200)).body;
     const fund = await submit(input('DEPOSIT', '1000')); expect((await approve(fund.body.id)).status).toBe(200);
     const pending = await send({ type: 'LOAN_DISBURSEMENT', memberId, amount: '100.01', installmentCount: 3, firstDueDate: '2027-01-31' });
     expect(await db.loan.count({ where: { societyId } })).toBe(0);
+    expect(await loanSummary()).toEqual({ disbursed: '0.00', repaid: '0.00', outstanding: '0.00', pending: 1 });
     const disbursement = await approve(pending.body.id); expect(disbursement.status).toBe(200); const loanId = disbursement.body.loanId;
     const loan = await request(app).get(`/api/finance/loans/${loanId}`).set(headers('ADMIN')).expect(200);
     expect(loan.body.outstanding).toBe('100.01'); expect(loan.body.installments.map((r: { amount: string }) => r.amount)).toEqual(['33.33','33.33','33.35']);
     const repayment = await send({ type: 'LOAN_REPAYMENT', loanId, amount: '20.01' }); expect((await approve(repayment.body.id)).status).toBe(200);
     expect((await request(app).get(`/api/finance/loans/${loanId}`).set(headers('ADMIN')).expect(200)).body.outstanding).toBe('80.00');
+    expect(await loanSummary()).toEqual({ disbursed: '100.01', repaid: '20.01', outstanding: '80.00', pending: 0 });
+    expect(await loanSummary(otherSocietyId)).toEqual({ disbursed: '0.00', repaid: '0.00', outstanding: '0.00', pending: 0 });
+    await request(app).get('/api/finance/loan-summary').set(headers('MEMBER')).expect(403);
     const tooMuch = await send({ type: 'LOAN_REPAYMENT', loanId, amount: '81' }); expect((await approve(tooMuch.body.id)).status).toBe(409);
     const investment = await send({ type: 'INVESTMENT_PURCHASE', amount: '200', title: 'Test partnership', counterparty: 'Test business' });
+    expect(await investmentSummary()).toEqual({ invested: '0.00', principalReturned: '0.00', outstanding: '0.00', profit: '0.00' });
     const purchase = await approve(investment.body.id); expect(purchase.status).toBe(200); const investmentId = purchase.body.investmentId;
     await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID()).send({ type:'INVESTMENT_RETURN', investmentId, cashAccountId:cashId, effectiveDate:'2026-11-09', amount:'61', principalReturned:'50', profit:'10' }).expect(422);
     const returned = await send({ type: 'INVESTMENT_RETURN', investmentId, amount: '60', principalReturned: '50', profit: '10' }); expect((await approve(returned.body.id)).status).toBe(200);
     const investmentReport = await request(app).get(`/api/finance/investments/${investmentId}`).set(headers('ADMIN')).expect(200); expect(investmentReport.body.outstanding).toBe('150.00'); expect(investmentReport.body.profit).toBe('10.00');
+    expect(await investmentSummary()).toEqual({ invested: '200.00', principalReturned: '50.00', outstanding: '150.00', profit: '10.00' });
+    expect(await investmentSummary(otherSocietyId)).toEqual({ invested: '0.00', principalReturned: '0.00', outstanding: '0.00', profit: '0.00' });
+    await request(app).get('/api/finance/investment-summary').set(headers('MEMBER')).expect(403);
     const overReturn = await send({ type:'INVESTMENT_RETURN', investmentId, amount:'151', principalReturned:'151', profit:'0' }); expect((await approve(overReturn.body.id)).status).toBe(409);
-    const expense = await send({ type: 'EXPENSE', amount: '30', category: 'Rent', payee: 'Landlord' }); expect((await approve(expense.body.id)).status).toBe(200);
+    const expense = await send({ type: 'EXPENSE', amount: '30', category: 'Rent', payee: 'Landlord' });
+    expect(await expenseSummary()).toEqual({ gross: '0.00', reversals: '0.00', net: '0.00', pending: 1 });
+    expect((await approve(expense.body.id)).status).toBe(200);
+    expect(await expenseSummary({ from: '2026-11-09', to: '2026-11-09' })).toEqual({ gross: '30.00', reversals: '0.00', net: '30.00', pending: 0 });
+    expect(await expenseSummary({}, otherSocietyId)).toEqual({ gross: '0.00', reversals: '0.00', net: '0.00', pending: 0 });
+    await request(app).get('/api/finance/expense-summary').set(headers('MEMBER')).expect(403);
     const bank = await db.ledgerAccount.findFirstOrThrow({ where: { societyId, code:'BANK-01' } });
     const transfer = await send({ type: 'TRANSFER', amount: '100', destinationAccountId: bank.id }); expect((await approve(transfer.body.id)).status).toBe(200);
     const report = await request(app).get('/api/finance/bank-summary').set(headers('ADMIN')).expect(200);
@@ -238,8 +255,15 @@ describe('Phase 2 financial workflow', () => {
     await request(app).get('/api/finance/investments').set(headers('MEMBER')).expect(403);
     const ownSavings = await request(app).get('/api/finance/statements/me').set(headers('MEMBER')).expect(200); expect(ownSavings.body.closingBalance).toBe('1030.35');
     const reverse = async (id:string) => { const r=await request(app).post(`/api/finance/transactions/${id}/reversal`).set(headers('ACCOUNTANT')).set('Idempotency-Key',randomUUID()).send({effectiveDate:'2026-11-09',note:'Correct business posting'}).expect(201); return approve(r.body.id); };
-    expect((await reverse(expense.body.id)).status).toBe(200); expect((await reverse(returned.body.id)).status).toBe(200);
+    const expenseReversal = await request(app).post(`/api/finance/transactions/${expense.body.id}/reversal`)
+      .set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID()).send({ effectiveDate: '2026-11-09', note: 'Correct expense posting' }).expect(201);
+    expect(await expenseSummary()).toEqual({ gross: '30.00', reversals: '0.00', net: '30.00', pending: 1 });
+    expect((await approve(expenseReversal.body.id)).status).toBe(200);
+    expect(await expenseSummary()).toEqual({ gross: '30.00', reversals: '30.00', net: '0.00', pending: 0 });
+    expect(await expenseSummary({ from: '2026-11-10' })).toEqual({ gross: '0.00', reversals: '0.00', net: '0.00', pending: 0 });
+    expect((await reverse(returned.body.id)).status).toBe(200);
     const restored = await request(app).get(`/api/finance/investments/${investmentId}`).set(headers('ADMIN')).expect(200); expect(restored.body.outstanding).toBe('200.00');expect(restored.body.profit).toBe('0.00');
+    expect(await investmentSummary()).toEqual({ invested: '200.00', principalReturned: '0.00', outstanding: '200.00', profit: '0.00' });
     expect((await reverse(pending.body.id)).status).toBe(409);
     const second = await send({type:'LOAN_DISBURSEMENT',memberId:secondMemberId,amount:'1',installmentCount:1,firstDueDate:'2027-01-31'}); const secondPosted=await approve(second.body.id);expect(secondPosted.status).toBe(200);
     await request(app).get(`/api/finance/loans/me/${secondPosted.body.loanId}`).set(headers('MEMBER')).expect(404);
@@ -250,7 +274,14 @@ describe('Phase 2 financial workflow', () => {
     expect((await request(app).get(`/api/finance/loans/${loanId}`).set(headers('ADMIN')).expect(200)).body.outstanding).toBe('20.00');
     expect((await reverse(investment.body.id)).status).toBe(200);
     expect((await request(app).get(`/api/finance/investments/${investmentId}`).set(headers('ADMIN')).expect(200)).body.status).toBe('CANCELLED');
+    expect(await investmentSummary()).toEqual({ invested: '0.00', principalReturned: '0.00', outstanding: '0.00', profit: '0.00' });
     const afterPeriod=await request(app).get('/api/finance/bank-summary').query({from:'2026-11-10'}).set(headers('ADMIN')).expect(200);expect(afterPeriod.body.items.every((r:{opening:string;closing:string;deposits:string;withdrawals:string})=>r.opening===r.closing&&r.deposits==='0.00'&&r.withdrawals==='0.00')).toBe(true);
+    const pendingReversal = await request(app).post(`/api/finance/transactions/${second.body.id}/reversal`)
+      .set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID()).send({ effectiveDate: '2026-11-09', note: 'Undo second loan' }).expect(201);
+    expect(await loanSummary()).toEqual({ disbursed: '101.01', repaid: '80.01', outstanding: '21.00', pending: 4 });
+    expect((await approve(pendingReversal.body.id)).status).toBe(200);
+    expect((await reverse(repayment.body.id)).status).toBe(200);
+    expect(await loanSummary()).toEqual({ disbursed: '100.01', repaid: '60.00', outstanding: '40.01', pending: 3 });
   });
   it('reports other income and investment profit by date, including approved reversals', async () => {
     const totals = async (from = '2026-11-10', to?: string) =>
