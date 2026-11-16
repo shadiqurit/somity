@@ -114,17 +114,36 @@ export async function expenseSummary(societyId: string, input: { from?: string; 
 }
 
 export async function bankSummary(societyId: string, input: { from?: string; to?: string }) {
+  const effectiveDate = range(input);
+  const accountKinds = ['CASH', 'BANK'] as const;
   return db.$transaction(async tx => {
-    const accounts = await tx.ledgerAccount.findMany({ where: { societyId, kind: { in: ['CASH', 'BANK'] } }, orderBy: { code: 'asc' } });
+    const accounts = await tx.ledgerAccount.findMany({ where: { societyId, kind: { in: [...accountKinds] } }, orderBy: { code: 'asc' } });
     const items = await Promise.all(accounts.map(async account => {
       const base = { societyId, accountId: account.id };
       const before = await tx.ledgerEntry.aggregate({ where: { ...base, transaction: { status: 'POSTED', effectiveDate: { lt: new Date(input.from ?? '1000-01-01') } } }, _sum: { debit: true, credit: true } });
-      const totals = await tx.ledgerEntry.aggregate({ where: { ...base, transaction: { status: 'POSTED', effectiveDate: range(input) } }, _sum: { debit: true, credit: true } });
+      const totals = await tx.ledgerEntry.aggregate({ where: { ...base, transaction: { status: 'POSTED', effectiveDate } }, _sum: { debit: true, credit: true } });
       const opening = (before._sum.debit ?? zero()).minus(before._sum.credit ?? zero()); const incoming = totals._sum.debit ?? zero(); const outgoing = totals._sum.credit ?? zero();
       return { ...account, opening: opening.toFixed(2), deposits: incoming.toFixed(2), withdrawals: outgoing.toFixed(2), closing: opening.plus(incoming).minus(outgoing).toFixed(2) };
     }));
-    const expenses = await expenseLedgerTotals(tx, societyId, range(input));
-    return { items, expenses: (expenses._sum.debit ?? zero()).minus(expenses._sum.credit ?? zero()).toFixed(2) };
+    const [expenses, flows] = await Promise.all([
+      expenseLedgerTotals(tx, societyId, effectiveDate),
+      tx.ledgerEntry.aggregate({
+        where: { societyId, account: { kind: { in: [...accountKinds] } }, transaction: { status: 'POSTED', effectiveDate, NOT: movements('TRANSFER') } },
+        _sum: { debit: true, credit: true },
+      }),
+    ]);
+    const opening = items.reduce((total, account) => total.plus(account.opening), zero());
+    const closing = items.reduce((total, account) => total.plus(account.closing), zero());
+    return {
+      items,
+      expenses: (expenses._sum.debit ?? zero()).minus(expenses._sum.credit ?? zero()).toFixed(2),
+      summary: {
+        opening: opening.toFixed(2),
+        incoming: (flows._sum.debit ?? zero()).toFixed(2),
+        outgoing: (flows._sum.credit ?? zero()).toFixed(2),
+        closing: closing.toFixed(2),
+      },
+    };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 

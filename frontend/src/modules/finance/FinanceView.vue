@@ -82,22 +82,25 @@ const accountColumns = [{ key: 'code', label: 'Code' }, { key: 'name', label: 'A
 const canDecide = computed(() => selected.value?.status === 'PENDING' && auth.can('finance.approve') && (selected.value.allowSelfApproval || selected.value.createdById !== auth.user?.id) && !selected.value.decisions.some(d => d.approverId === auth.user?.id));
 async function load(value = 1) {
   const sequence = ++loadSequence; const requestedTab = tab.value;
+  const isProductReport = requestedTab === 'loans' || requestedTab === 'investments' || requestedTab === 'bank';
   page.value = value; loading.value = true; error.value = '';
   const range = { from: from.value || undefined, to: to.value || undefined };
   const params = { ...range, page: value, pageSize: 20, status: status.value || undefined, type: requestedTab === 'expenses' ? 'EXPENSE' : type.value || undefined, scope: requestedTab === 'income' ? 'income' : undefined };
   try {
     const [s, a, p, records] = await Promise.all([
-      api.get(summaryEndpoints[requestedTab] ?? '/finance/summary', { params: range }),
+      requestedTab === 'bank' ? undefined : api.get(summaryEndpoints[requestedTab] ?? '/finance/summary', { params: range }),
       api.get('/finance/accounts'),
       api.get('/finance/policy'),
-      requestedTab === 'loans' || requestedTab === 'investments' ? undefined : api.get(requestedTab === 'ledger' ? '/finance/ledger' : '/finance/transactions', { params }),
+      isProductReport ? undefined : api.get(requestedTab === 'ledger' ? '/finance/ledger' : '/finance/transactions', { params }),
     ]);
     if (sequence !== loadSequence) return;
-    if (requestedTab === 'loans') loanSummary.value = s.data;
-    else if (requestedTab === 'investments') investmentSummary.value = s.data;
-    else if (requestedTab === 'income') incomeSummary.value = s.data;
-    else if (requestedTab === 'expenses') expenseSummary.value = s.data;
-    else summary.value = s.data;
+    if (s) {
+      if (requestedTab === 'loans') loanSummary.value = s.data;
+      else if (requestedTab === 'investments') investmentSummary.value = s.data;
+      else if (requestedTab === 'income') incomeSummary.value = s.data;
+      else if (requestedTab === 'expenses') expenseSummary.value = s.data;
+      else summary.value = s.data;
+    }
     accounts.value = a.data; policy.value = p.data; reportRevision.value++;
     if (records) {
       if (requestedTab === 'ledger') ledgerRows.value = records.data.items; else rows.value = records.data.items;
@@ -256,6 +259,7 @@ onMounted(() => load());
       <p v-if="section === 'income'">Other income and investment profit for {{ auth.user?.society?.name }}.</p>
       <p v-else-if="section === 'loans'">Loan balances and repayments for {{ auth.user?.society?.name }}.</p>
       <p v-else-if="section === 'investments'">Investment principal and returns for {{ auth.user?.society?.name }}.</p>
+      <p v-else-if="section === 'bank'">Cash and bank balances for {{ auth.user?.society?.name }}.</p>
       <p v-else-if="section === 'expenses'">Expense records for {{ auth.user?.society?.name }}.</p>
       <p v-else>Financial records for {{ auth.user?.society?.name }}.</p>
     </div>

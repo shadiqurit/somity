@@ -246,9 +246,12 @@ describe('Phase 2 financial workflow', () => {
     expect(await expenseSummary({}, otherSocietyId)).toEqual({ gross: '0.00', reversals: '0.00', net: '0.00', pending: 0 });
     await request(app).get('/api/finance/expense-summary').set(headers('MEMBER')).expect(403);
     const bank = await db.ledgerAccount.findFirstOrThrow({ where: { societyId, code:'BANK-01' } });
+    const beforeTransfer = await request(app).get('/api/finance/bank-summary').set(headers('ADMIN')).expect(200);
     const transfer = await send({ type: 'TRANSFER', amount: '100', destinationAccountId: bank.id }); expect((await approve(transfer.body.id)).status).toBe(200);
     const report = await request(app).get('/api/finance/bank-summary').set(headers('ADMIN')).expect(200);
     expect(report.body.expenses).toBe('30.00'); expect(report.body.items.find((r:{id:string})=>r.id===cashId).closing).toBe('680.35'); expect(report.body.items.find((r:{id:string})=>r.id===bank.id).closing).toBe('100.00');
+    expect(report.body.summary).toEqual(beforeTransfer.body.summary);
+    expect(report.body.summary).toMatchObject({ opening: '0.00', closing: '780.35' });
     const own = await request(app).get('/api/finance/loans/me').set(headers('MEMBER')).expect(200); expect(own.body.items.map((r:{id:string})=>r.id)).toContain(loanId);
     await request(app).get(`/api/finance/loans/me/${loanId}`).set(headers('MEMBER')).expect(200);
     await request(app).get(`/api/finance/loans/${loanId}`).set(headers('ADMIN',otherSocietyId)).expect(404);
@@ -276,6 +279,12 @@ describe('Phase 2 financial workflow', () => {
     expect((await request(app).get(`/api/finance/investments/${investmentId}`).set(headers('ADMIN')).expect(200)).body.status).toBe('CANCELLED');
     expect(await investmentSummary()).toEqual({ invested: '0.00', principalReturned: '0.00', outstanding: '0.00', profit: '0.00' });
     const afterPeriod=await request(app).get('/api/finance/bank-summary').query({from:'2026-11-10'}).set(headers('ADMIN')).expect(200);expect(afterPeriod.body.items.every((r:{opening:string;closing:string;deposits:string;withdrawals:string})=>r.opening===r.closing&&r.deposits==='0.00'&&r.withdrawals==='0.00')).toBe(true);
+    expect(afterPeriod.body.summary).toEqual({ opening: afterPeriod.body.summary.closing, incoming: '0.00', outgoing: '0.00', closing: afterPeriod.body.summary.closing });
+    const beforeTransferReversal = await request(app).get('/api/finance/bank-summary').set(headers('ADMIN')).expect(200);
+    expect((await reverse(transfer.body.id)).status).toBe(200);
+    const afterTransferReversal = await request(app).get('/api/finance/bank-summary').set(headers('ADMIN')).expect(200);
+    expect(afterTransferReversal.body.summary).toEqual(beforeTransferReversal.body.summary);
+    expect(afterTransferReversal.body.items.find((row: { id: string }) => row.id === bank.id).closing).toBe('0.00');
     const pendingReversal = await request(app).post(`/api/finance/transactions/${second.body.id}/reversal`)
       .set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID()).send({ effectiveDate: '2026-11-09', note: 'Undo second loan' }).expect(201);
     expect(await loanSummary()).toEqual({ disbursed: '101.01', repaid: '80.01', outstanding: '21.00', pending: 4 });

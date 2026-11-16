@@ -13,6 +13,7 @@ export interface IncomeSummary { otherIncome: string; investmentProfit: string; 
 export interface LoanSummary { disbursed: string; repaid: string; outstanding: string; pending: number; }
 export interface InvestmentSummary { invested: string; principalReturned: string; outstanding: string; profit: string; }
 export interface ExpenseSummary { gross: string; reversals: string; net: string; pending: number; }
+export interface BankSummary { opening: string; incoming: string; outgoing: string; closing: string; }
 export interface LedgerLine { id: string; debit: string; credit: string; account: { code: string; name: string }; member: { fullName: string; memberNo: string } | null; transaction: { transactionNo: string; effectiveDate: string; type: string }; }
 export interface StatementLine { id: string; transactionId: string; transactionNo: string; type: string; effectiveDate: string; reference: string; note: string; deposit: string; withdrawal: string; balance: string; }
 export interface MemberStatement { member: { fullName: string; memberNo: string }; openingBalance: string; closingBalance: string; deposits: string; withdrawals: string; items: StatementLine[]; page: number; pages: number; total: number; }

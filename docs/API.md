@@ -31,6 +31,7 @@ All routes below require authentication, a changed initial password and an activ
 | GET `/finance/loan-summary` | finance.read | Society-wide loan principal disbursed, repaid, and outstanding after posted reversals, plus the number of pending loan requests. |
 | GET `/finance/investment-summary` | finance.read | Society-wide principal invested, returned, and outstanding, plus realized profit after posted reversals. |
 | GET `/finance/expense-summary` | finance.read | Approved expenses, expense reversals, net expenses, and pending expense requests. Optional `from` and `to` filter by effective date. |
+| GET `/finance/bank-summary` | finance.read | Per-account movements and combined opening, incoming, outgoing, and closing totals for cash and bank accounts. Combined flows omit internal transfers and their reversals. Accepts optional `from` and `to`. |
 | GET `/finance/statements/:memberId` | finance.read | Approved movements, opening/closing/running balances; optional from/to/page/pageSize. Archived members' financial history remains available to staff. |
 | GET `/finance/statements/me` | profile.read | Identical statement restricted to the caller's linked member. Cannot select another member. |
 

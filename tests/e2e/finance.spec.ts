@@ -135,7 +135,16 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
   await expect(netExpenses).toContainText('৳ 0.00');
   await page.goto('/bank');await expect(page.getByRole('cell',{name:'৳ 1,255.24',exact:true})).toBeVisible();
+  const bankDashboard = page.getByRole('region', { name: 'Cash and bank dashboard', exact: true });
+  const closing = bankDashboard.locator('article').filter({ hasText: 'Closing balance' });
+  await expect(bankDashboard.locator('article').filter({ hasText: 'Money in' })).toContainText('৳ 1,600.25');
+  await expect(bankDashboard.locator('article').filter({ hasText: 'Money out' })).toContainText('৳ 345.01');
+  await expect(closing).toContainText('৳ 1,255.24');
+  await expect(page.getByRole('region', { name: 'Financial summary', exact: true })).toHaveCount(0);
   await page.screenshot({path:testInfo.outputPath('bank-summary-desktop.png'),fullPage:true});
+  await page.getByLabel('To date').fill('2026-01-01');
+  await page.getByRole('button', { name: 'Apply dates', exact: true }).click();
+  await expect(closing).toContainText('৳ 0.00');
   await page.getByRole('button', { name: 'Transfer funds', exact: true }).click();
   const transfer = page.getByRole('dialog', { name: 'New transaction', exact: true });
   await expect(transfer.getByLabel('Transaction type').locator('option')).toHaveText(['Transfer']);

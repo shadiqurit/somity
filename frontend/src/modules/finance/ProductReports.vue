@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import { ArrowDownLeft, ArrowUpRight, Landmark, Wallet } from 'lucide-vue-next';
 import { api, errorMessage } from '../../services/api';
 import { useAuthStore } from '../../stores/auth';
-import { bdt } from './types';
+import { bdt, type BankSummary } from './types';
 import { date } from '../../utils/format';
 import AppTable from '../../components/tables/AppTable.vue';
 import AppButton from '../../components/ui/AppButton.vue';
 import AppInput from '../../components/ui/AppInput.vue';
 import AppModal from '../../components/modals/AppModal.vue';
+import SummaryCard from '../../components/ui/SummaryCard.vue';
 interface Product { id: string; principal: string; outstanding: string; installmentAmount?: string; installmentCount?: number; nextDueDate?: string; profit?: string; principalReturned?: string; title?: string; counterparty?: string; status: string; member?: { fullName: string; memberNo: string }; installments?: { number: number; dueDate: string; amount: string; paid: string; outstanding: string; status: string }[]; history?: { id: string; transactionNo: string; type: string; amount: string; effectiveDate: string }[]; }
 interface Bank { id: string; name: string; code: string; kind: string; opening: string; deposits: string; withdrawals: string; closing: string; }
 const props = defineProps<{ kind: 'loans' | 'investments' | 'bank'; own?: boolean; memberId?: string; refresh?: number }>();
 const emit = defineEmits<{ entry: [value: { type: string; loanId?: string; investmentId?: string; label?: string }] }>();
 const auth = useAuthStore(); const items = ref<Product[]>([]); const banks = ref<Bank[]>([]); const total = ref(0); const page = ref(1); const pages = ref(1); const loading = ref(false); const error = ref(''); const from = ref(''); const to = ref(''); const selected = ref<Product>();
+const bankSummary = ref<BankSummary>();
 const loanColumns = computed(() => [{ key: 'member', label: 'Member' }, { key: 'principal', label: 'Loan amount' }, { key: 'outstanding', label: 'Outstanding' }, { key: 'installmentAmount', label: 'Monthly installment' }, { key: 'nextDueDate', label: 'Next due' }, { key: 'status', label: 'Status' }, { key: 'actions', label: 'Actions' }].filter(column => !props.own || column.key !== 'member'));
 const investmentColumns = [{ key: 'title', label: 'Investment' }, { key: 'principal', label: 'Invested' }, { key: 'principalReturned', label: 'Principal returned' }, { key: 'profit', label: 'Profit received' }, { key: 'outstanding', label: 'Outstanding' }, { key: 'status', label: 'Status' }, { key: 'actions', label: 'Actions' }];
 let sequence = 0;
@@ -22,7 +25,10 @@ async function load(value = 1) {
     const endpoint = props.kind === 'bank' ? '/finance/bank-summary' : `/finance/${props.kind}${props.own ? '/me' : ''}`;
     const { data } = await api.get(endpoint, { params: { ...(props.kind === 'bank' ? { from: from.value || undefined, to: to.value || undefined } : { page: value, pageSize: 20, memberId: props.memberId }) } });
     if (request !== sequence) return;
-    if (props.kind === 'bank') banks.value = data.items;
+    if (props.kind === 'bank') {
+      banks.value = data.items;
+      bankSummary.value = data.summary;
+    }
     else { items.value = data.items; total.value = data.total; pages.value = data.pages; }
   } catch (e) { if (request === sequence) error.value = errorMessage(e); } finally { if (request === sequence) loading.value = false; }
 }
@@ -30,6 +36,12 @@ async function detail(id: string) { error.value = ''; try { selected.value = (aw
 watch(() => [props.kind, props.refresh, props.memberId], () => load()); onMounted(() => load());
 </script>
 <template>
+  <section v-if="kind === 'bank' && bankSummary" class="summary-grid finance-summary" aria-label="Cash and bank dashboard">
+    <SummaryCard label="Opening balance" :value="bdt(bankSummary.opening)" detail="Cash and bank funds before the period"><Landmark :size="20" /></SummaryCard>
+    <SummaryCard label="Money in" :value="bdt(bankSummary.incoming)" detail="Funds received from outside these accounts"><ArrowDownLeft :size="20" /></SummaryCard>
+    <SummaryCard label="Money out" :value="bdt(bankSummary.outgoing)" detail="Funds paid outside these accounts"><ArrowUpRight :size="20" /></SummaryCard>
+    <SummaryCard label="Closing balance" :value="bdt(bankSummary.closing)" detail="Cash and bank funds at the end of the period"><Wallet :size="20" /></SummaryCard>
+  </section>
   <section class="panel finance-statement product-report">
     <div class="panel-heading"><div><h2>{{ kind === 'loans' ? (own ? 'My loans' : 'Loans') : kind === 'investments' ? 'Investments & returns' : 'Cash & bank summary' }}</h2><p>{{ kind === 'loans' ? 'Approved principal, monthly installments and repayments.' : kind === 'investments' ? 'Approved investment principal and realized profit.' : 'Opening balance + deposits − withdrawals = closing balance.' }}</p></div><AppButton v-if="!own && !memberId && auth.can('finance.write')" @click="emit('entry', { type: kind === 'loans' ? 'LOAN_DISBURSEMENT' : kind === 'investments' ? 'INVESTMENT_PURCHASE' : 'TRANSFER' })">{{ kind === 'loans' ? 'New loan' : kind === 'investments' ? 'New investment' : 'Transfer funds' }}</AppButton></div>
     <div v-if="error" class="alert error" role="alert">{{ error }} <AppButton variant="ghost" @click="load()">Retry</AppButton></div>
