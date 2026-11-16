@@ -2,7 +2,7 @@
 
 ## Checkout and status
 
-As of 17 November 2026, the application baseline is `b722f0a` on `main`, matching the local `origin/main` reference. The starting working tree was clean. This handoff updates project documentation. The application baseline already includes the bank dashboard, financial reports, member closure, and activity feeds. There is no pending feature request in this handoff.
+As of 17 November 2026, the checkout starts from `fcf146e` on `main`. The subsequent final-settlement changes add a profile workflow for recording savings refunds, collecting loan principal and closing the membership. The prior application baseline, `b722f0a`, includes the bank dashboard, financial reports, member closure, and activity feeds.
 
 Start with [README.md](../README.md) for setup and [API.md](API.md) for route contracts. [SPEC.md](../SPEC.md) is the original project brief. [MULTI_SOCIETY.md](MULTI_SOCIETY.md), [PHASE2.md](PHASE2.md), and [FINANCIAL_MODULES.md](FINANCIAL_MODULES.md) explain the implemented tenancy and accounting workflows. Use the routes, validators, Prisma schema, migrations, and tests to confirm actual behavior when changing a feature.
 
@@ -18,6 +18,8 @@ Start with [README.md](../README.md) for setup and [API.md](API.md) for route co
 
 ## Latest changes to pick up
 
+- Member profiles now include a final settlement. Migration `202611170005_member_settlement` captures opening dues and links payments to their settlement. [finance.settlement.ts](../backend/src/modules/finance/finance.settlement.ts) calculates the snapshot and payment totals. [MemberSettlement.vue](../frontend/src/modules/members/MemberSettlement.vue) handles the profile workflow. See [the settlement guide](FINANCIAL_MODULES.md#member-final-settlement).
+- The final settlement also links to a date-filtered, paginated dues statement. [finance.member-statement.ts](../backend/src/modules/finance/finance.member-statement.ts) reconciles posted savings and loan movements with cash or bank payments. [MemberDuesStatement.vue](../frontend/src/modules/members/MemberDuesStatement.vue) shows running balances and reversal links in English and Bangla.
 - `b722f0a` added four aggregate cards to the Bank page. `GET /api/finance/bank-summary?from=YYYY-MM-DD&to=YYYY-MM-DD` returns `items`, `expenses`, and `summary: { opening, incoming, outgoing, closing }`. Dates are optional and inclusive for within-period movements. The per-account rows include posted transfers and transfer reversals. Aggregate incoming/outgoing omit both sides of internal transfers and their reversals. Net expenses remain available in `expenses`. Amounts are decimal strings.
 - The bank report starts in [finance.reports.ts](../backend/src/modules/finance/finance.reports.ts) and renders in [ProductReports.vue](../frontend/src/modules/finance/ProductReports.vue). [types.ts](../frontend/src/modules/finance/types.ts) defines the frontend shape. The finance integration spec checks transfer and reversal reconciliation. The browser finance spec covers the Bank cards and table.
 - `cb55af4` added the loan, investment and expense summary endpoints used by the corresponding Finance views. These report posted amounts and their reversals. Pending counts are separate where exposed.
@@ -63,16 +65,16 @@ The Vite app is at `http://localhost:5173` and proxies `/api` to `127.0.0.1:4000
 | Check | Result during this handoff |
 | --- | --- |
 | `npm run typecheck` | Passed for both workspaces. |
-| `npm run build` | Passed for backend and frontend. |
+| Prisma client generation and workspace builds | Passed for backend and frontend. |
 | `npm run build:lan -w frontend` | Passed for the `/somity/` target. |
 | `npm test` | Passed, 8 backend unit tests. |
-| `npm run test:e2e -- --list` | Found all three browser specs. |
-| `npm run test:integration`, `npm run test:e2e` | Pending. The configured MySQL test URL passed the local `_test` schema check, but this session's TCP probe was denied with `EACCES`. No MySQL integration suites or browser workflows were run. |
+| MySQL integration suites | Applied `202611170005_member_settlement` to the isolated test schema and passed all 47 tests. |
+| `npm run test:e2e` | Passed all three browser workflows, including refund, loan repayment, approval and closure. |
 
-To run the pending checks, use the isolated `TEST_DATABASE_URL` schema ending in `_test` and apply all committed migrations to it using the [README procedure](../README.md#verification). The integration command runs the member/auth/photo, tenancy and finance suites under [backend/tests](../backend/tests/). Playwright uses Chrome by default and starts a dedicated API on port 4100 and frontend on port 5174. Its fixtures and storage setup are documented in [the browser test README](../tests/e2e/README.md). Start with the finance suites when verifying the latest bank changes.
+For database checks, use the isolated `TEST_DATABASE_URL` schema ending in `_test` and apply all committed migrations to it using the [README procedure](../README.md#verification). The integration command runs the member/auth/photo, tenancy and finance suites under [backend/tests](../backend/tests/). Playwright uses Chrome by default and starts a dedicated API on port 4100 and frontend on port 5174. Its fixtures and storage setup are documented in [the browser test README](../tests/e2e/README.md).
 
 ## Deployment and pending decisions
 
-- The repository has Nginx configurations for the root HTTPS VPS build and the LAN `/somity/` build. The Nginx setup proxies to the local PM2 backend on port 3004. LAN routing uses a Vite base of `/somity/`, SPA fallback, and a rewrite for the refresh cookie path. See the [Windows Nginx guide](WINDOWS_NGINX_DEPLOYMENT.md) or the [Caddy/WinSW guide](WINDOWS_DEPLOYMENT.md) as appropriate. This handoff did not check the running deployments, apply migrations or restart services.
+- The repository has Nginx configurations for the root HTTPS VPS build and the LAN `/somity/` build. The Nginx setup proxies to the local PM2 backend on port 3004. LAN routing uses a Vite base of `/somity/`, SPA fallback, and a rewrite for the refresh cookie path. The settlement migration was applied only to the test schema. Apply it to the target database before deploying the updated API. See the [Windows Nginx guide](WINDOWS_NGINX_DEPLOYMENT.md) or the [Caddy/WinSW guide](WINDOWS_DEPLOYMENT.md) as appropriate.
 - Back up SQL and private uploads before an upgrade. Generate the client, review and deploy committed migrations, rebuild, restart the API, and verify health plus a signed-in page reload. The health response checks database reachability and advertises capabilities. It does not establish that a specific report or migration works.
 - The guides identify later work including opening-balance journals, PDF/Excel exports, automatic interest/profit allocation, scheduled encrypted backups, and linking an existing login to another society through the UI. These have no assigned priority here.

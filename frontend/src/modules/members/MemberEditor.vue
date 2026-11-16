@@ -115,7 +115,7 @@ onMounted(load);
           <AppDatePicker v-model="form.joinedAt" label="Membership date" />
           <div>
             <AppSelect v-model="form.status" label="Membership status" :options="membershipOptions" :disabled="initialStatus === 'CLOSED'" :aria-describedby="closingMembership ? closureHintId : undefined" />
-            <small v-if="closingMembership" :id="closureHintId" class="muted">Clear savings, settle all loan installments, and resolve pending transactions before closing. Closing disables the member’s login.</small>
+            <small v-if="closingMembership" :id="closureHintId" class="muted">Use Final settlement on the member profile to record any savings refunds and loan repayments. Closing disables the member’s login.</small>
           </div>
           <label class="field full-span"><span>Present address</span><textarea v-model="form.address" placeholder="House, road, area and district" required minlength="3" maxlength="500" rows="2" autocomplete="street-address"></textarea></label>
           <label class="field full-span"><span>Permanent address (optional)</span><textarea v-model="form.permanentAddress" placeholder="House, road, area and district" maxlength="500" rows="2"></textarea></label>

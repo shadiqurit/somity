@@ -6,7 +6,8 @@ import { audit, auditPageFilter } from '../../services/audit.js';
 import { lockActiveSociety } from '../../services/tenant.js';
 import { AppError } from '../../utils/errors.js';
 import { productLines, isAsset, principalSchedule } from './finance.posting.js';
-import type { accountSchema, policySchema, reversalSchema, decisionSchema, transactionLogSchema, TransactionInput, FinanceListInput } from './finance.validator.js';
+import { assertSettlementPayment, findSettlement, memberLedgerBalance, pendingMemberTransactions, postedMemberEntries } from './finance.settlement.js';
+import type { accountSchema, policySchema, reversalSchema, decisionSchema, settlementPaymentSchema, transactionLogSchema, TransactionInput, FinanceListInput } from './finance.validator.js';
 
 // Match MySQL aggregate precision so large balances retain their cents.
 Prisma.Decimal.set({ precision: 65 });
@@ -34,19 +35,12 @@ function financialMutation<T>(societyId: string, action: (tx: Tx) => Promise<T>)
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 });
 }
 
-function postedMemberEntries(societyId: string, memberId: string, kind: 'MEMBER_SAVINGS' | 'LOAN_RECEIVABLE') {
-  return { societyId, memberId, account: { kind }, transaction: { status: 'POSTED' as const } };
-}
-
 export async function assertMemberSettled(tx: Tx, societyId: string, memberId: string) {
-  const [savings, loan, pending] = await Promise.all([
-    tx.ledgerEntry.aggregate({ where: postedMemberEntries(societyId, memberId, 'MEMBER_SAVINGS'), _sum: { debit: true, credit: true } }),
-    tx.ledgerEntry.aggregate({ where: postedMemberEntries(societyId, memberId, 'LOAN_RECEIVABLE'), _sum: { debit: true, credit: true } }),
-    tx.financialTransaction.findFirst({ where: { societyId, memberId, status: 'PENDING' }, select: { id: true } }),
+  const [savingsBalance, loanBalance, pending] = await Promise.all([
+    memberLedgerBalance(tx, societyId, memberId, 'MEMBER_SAVINGS'),
+    memberLedgerBalance(tx, societyId, memberId, 'LOAN_RECEIVABLE'),
+    pendingMemberTransactions(tx, societyId, memberId),
   ]);
-  const savingsBalance = (savings._sum.credit ?? zero()).minus(savings._sum.debit ?? zero());
-  // Loan installments are principal-only, so this balance includes all unpaid installments.
-  const loanBalance = (loan._sum.debit ?? zero()).minus(loan._sum.credit ?? zero());
   const blockers = [];
   if (!loanBalance.isZero()) blockers.push(`Settle the outstanding loan balance (${money(loanBalance)} BDT).`);
   if (!savingsBalance.isZero()) blockers.push(`Clear the savings balance (${money(savingsBalance)} BDT).`);
@@ -147,6 +141,34 @@ async function replay(tx: Tx, societyId: string, key: string, hash: string) {
   return get(societyId, item.id, tx);
 }
 const requestHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+async function requireCashAccount(tx: Tx, societyId: string, cashAccountId: string) {
+  const account = await tx.ledgerAccount.findFirst({ where: { id: cashAccountId, societyId, isActive: true, kind: { in: ['CASH', 'BANK'] } } });
+  if (!account) throw new AppError(404, 'Active cash or bank account not found in this society');
+}
+
+type NewRequest = Pick<TransactionInput, 'type' | 'cashAccountId' | 'amount' | 'effectiveDate' | 'reference' | 'note' | 'loanId'> &
+  Partial<Pick<TransactionInput, 'investmentId'>>;
+
+async function createRequest(tx: Tx, societyId: string, actorId: string, input: NewRequest, request: {
+  key: string; hash: string; memberId: string | null; details?: Prisma.InputJsonObject; settlementId?: string;
+}) {
+  const { type, cashAccountId, amount, effectiveDate, reference, note, loanId, investmentId } = input;
+  const { key, hash, memberId, details, settlementId } = request;
+  const policy = await tx.financePolicy.findUnique({ where: { societyId } });
+  const item = await tx.financialTransaction.create({ data: {
+    societyId, type, memberId, cashAccountId, amount, effectiveDate: new Date(effectiveDate), reference, note, loanId, investmentId,
+    details, settlementId, createdById: actorId, idempotencyKey: key, requestHash: hash,
+    transactionNo: 'TX-' + randomBytes(12).toString('hex').toUpperCase(),
+    policyVersion: policy?.version ?? 0, requiredApprovals: policy?.requiredApprovals ?? 1, allowSelfApproval: policy?.allowSelfApproval ?? false,
+  } });
+  await audit(tx, actorId, 'FINANCE_REQUESTED', 'transaction', item.id, {
+    ...JSON.parse(JSON.stringify(input)), ...(settlementId ? { memberId, settlementId } : {}),
+    requiredApprovals: item.requiredApprovals, policyVersion: item.policyVersion,
+  }, societyId);
+  return get(societyId, item.id, tx);
+}
+
 export async function submit(societyId: string, actorId: string, input: TransactionInput, key: string) {
   const normalized = { ...input, amount: new Prisma.Decimal(input.amount).toFixed(2) };
   const hash = requestHash({ actorId, ...normalized });
@@ -154,8 +176,7 @@ export async function submit(societyId: string, actorId: string, input: Transact
     const prior = await replay(tx, societyId, key, hash); if (prior) return prior;
     let memberId = input.memberId;
     if (memberId && !await tx.member.findFirst({ where: { id: memberId, societyId, archivedAt: null, status: 'ACTIVE' } })) throw new AppError(404, 'Active member not found in this society');
-    const account = await tx.ledgerAccount.findFirst({ where: { id: input.cashAccountId, societyId, isActive: true, kind: { in: ['CASH', 'BANK'] } } });
-    if (!account) throw new AppError(404, 'Active cash or bank account not found in this society');
+    await requireCashAccount(tx, societyId, input.cashAccountId);
     if (input.loanId) {
       const loan = await tx.loan.findUnique({ where: { societyId_id: { societyId, id: input.loanId } }, include: { disbursement: true, member: { select: { status: true } } } });
       if (!loan) throw new AppError(404, 'Loan not found in this society');
@@ -169,13 +190,30 @@ export async function submit(societyId: string, actorId: string, input: Transact
       await assertProductDate(tx, societyId, investment.purchase, new Date(input.effectiveDate));
     }
     if (input.destinationAccountId && !await tx.ledgerAccount.findFirst({ where: { societyId, id: input.destinationAccountId, kind: { in: ['CASH', 'BANK'] }, isActive: true } })) throw new AppError(404, 'Destination account not found in this society');
+    if (memberId && await findSettlement(tx, societyId, memberId)) throw new AppError(409, 'Record this payment from the member’s final settlement');
     if (input.type === 'LOAN_DISBURSEMENT') principalSchedule(input.amount, input.installmentCount!, input.firstDueDate!);
     if (input.type === 'INVESTMENT_RETURN' && !new Prisma.Decimal(input.principalReturned!).plus(input.profit!).eq(input.amount)) throw new AppError(422, 'Return amount must equal principal returned plus profit');
     const details = Object.fromEntries(['installmentCount', 'firstDueDate', 'title', 'counterparty', 'principalReturned', 'profit', 'category', 'payee', 'destinationAccountId'].filter(key => normalized[key as keyof typeof normalized] != null).map(key => [key, normalized[key as keyof typeof normalized]])) as Prisma.InputJsonObject;
-    const captured = await tx.financePolicy.findUnique({ where: { societyId } });
-    const item = await tx.financialTransaction.create({ data: { societyId, type: input.type, memberId, cashAccountId: input.cashAccountId, amount: normalized.amount, effectiveDate: new Date(input.effectiveDate), reference: input.reference, note: input.note, loanId: input.loanId, investmentId: input.investmentId, details, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: 'TX-' + randomBytes(12).toString('hex').toUpperCase(), policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
-    await audit(tx, actorId, 'FINANCE_REQUESTED', 'transaction', item.id, { ...JSON.parse(JSON.stringify(normalized)), requiredApprovals: item.requiredApprovals, policyVersion: item.policyVersion }, societyId);
-    return get(societyId, item.id, tx);
+    return createRequest(tx, societyId, actorId, normalized, { key, hash, memberId, details });
+  });
+}
+
+export async function submitSettlementPayment(societyId: string, actorId: string, memberId: string, input: z.infer<typeof settlementPaymentSchema>, key: string) {
+  const amount = new Prisma.Decimal(input.amount).toFixed(2);
+  const hash = requestHash({ actorId, settlementMemberId: memberId, ...input, amount });
+  return financialMutation(societyId, async tx => {
+    const prior = await replay(tx, societyId, key, hash);
+    if (prior) return prior;
+    const settlement = await findSettlement(tx, societyId, memberId);
+    if (!settlement || settlement.closedAt) throw new AppError(404, 'Open member settlement not found');
+    await assertSettlementPayment(tx, settlement, input.loanId, amount);
+    await requireCashAccount(tx, societyId, input.cashAccountId);
+    if (input.loanId) {
+      const loan = await tx.loan.findUniqueOrThrow({ where: { societyId_id: { societyId, id: input.loanId } }, include: { disbursement: true } });
+      await assertProductDate(tx, societyId, loan.disbursement, new Date(input.effectiveDate));
+    }
+    const type = input.loanId ? 'LOAN_REPAYMENT' : 'WITHDRAWAL';
+    return createRequest(tx, societyId, actorId, { ...input, type, amount }, { key, hash, memberId, settlementId: settlement.id });
   });
 }
 async function assertProductDate(tx: Tx, societyId: string, original: { id: string; effectiveDate: Date; status: string }, date: Date) {
@@ -190,11 +228,14 @@ export async function requestReversal(societyId: string, actorId: string, id: st
     const original = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } }, include: { member: { select: { status: true } } } });
     if (!original || original.deletedAt) throw new AppError(404, 'Transaction not found');
     if (original.member?.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
+    if (original.memberId && !original.settlementId && await findSettlement(tx, societyId, original.memberId)) {
+      throw new AppError(409, 'Historical transactions cannot be reversed during final settlement');
+    }
     if (original.status !== 'POSTED' || original.type === 'REVERSAL') throw new AppError(409, 'Only an original posted transaction can be reversed');
     if (new Date(input.effectiveDate) < original.effectiveDate) throw new AppError(422, 'Reversal date cannot precede the original transaction');
     if (await tx.financialTransaction.findFirst({ where: { societyId, reversalOfId: id, status: { in: ['PENDING', 'POSTED'] } } })) throw new AppError(409, 'A reversal is already pending or posted');
     const captured = await tx.financePolicy.findUnique({ where: { societyId } });
-    const item = await tx.financialTransaction.create({ data: { societyId, type: 'REVERSAL', memberId: original.memberId, loanId: original.loanId, investmentId: original.investmentId, details: original.details ?? Prisma.JsonNull, cashAccountId: original.cashAccountId, amount: original.amount, effectiveDate: new Date(input.effectiveDate), reference: original.transactionNo, note: input.note, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: `RV-${randomBytes(12).toString('hex').toUpperCase()}`, reversalOfId: id, policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
+    const item = await tx.financialTransaction.create({ data: { societyId, type: 'REVERSAL', memberId: original.memberId, settlementId: original.settlementId, loanId: original.loanId, investmentId: original.investmentId, details: original.details ?? Prisma.JsonNull, cashAccountId: original.cashAccountId, amount: original.amount, effectiveDate: new Date(input.effectiveDate), reference: original.transactionNo, note: input.note, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: `RV-${randomBytes(12).toString('hex').toUpperCase()}`, reversalOfId: id, policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
     await audit(tx, actorId, 'FINANCE_REVERSAL_REQUESTED', 'transaction', item.id, { reversalOfId: id, ...input }, societyId);
     return get(societyId, item.id, tx);
   });
@@ -231,7 +272,9 @@ async function post(tx: Tx, societyId: string, id: string, actorId: string) {
   if (item.memberId) {
     const member = await tx.member.findUniqueOrThrow({ where: { societyId_id: { societyId, id: item.memberId } }, select: { status: true, archivedAt: true } });
     if (member.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
-    if (item.type !== 'REVERSAL' && item.type !== 'LOAN_REPAYMENT' && (member.archivedAt || member.status !== 'ACTIVE')) throw new AppError(409, 'Member is no longer active');
+    if (member.archivedAt || (member.status !== 'ACTIVE' && item.type !== 'REVERSAL' && item.type !== 'LOAN_REPAYMENT' && !item.settlementId)) {
+      throw new AppError(409, 'Member is no longer active');
+    }
   }
   if (item.type === 'LOAN_REPAYMENT') {
     const loan = await tx.loan.findUniqueOrThrow({ where: { societyId_id: { societyId, id: item.loanId! } }, include: { disbursement: true } });

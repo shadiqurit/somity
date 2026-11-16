@@ -12,6 +12,9 @@ let onRefreshed: (user: unknown) => void = () => {};
 let onExpired: () => void = () => {};
 let pending: Promise<string> | null = null;
 export function setToken(value: string | null) { token = value; }
+export function newIdempotencyKey() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+}
 export function setSocietyId(value: string | null) {
   societyId = value;
   if (value) sessionStorage.setItem('somity_society_id', value); else sessionStorage.removeItem('somity_society_id');

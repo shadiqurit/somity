@@ -9,3 +9,8 @@ memberRouter.get('/:id', controller.get);
 memberRouter.put('/:id', requirePermission('members.write'), controller.update);
 memberRouter.delete('/:id', requirePermission('members.archive'), controller.archive);
 memberRouter.post('/:id/login', requirePermission('users.manage'), controller.createLogin);
+memberRouter.get('/:id/settlement', requirePermission('finance.read'), controller.getSettlement);
+memberRouter.get('/:id/settlement/statement', requirePermission('finance.read'), controller.getSettlementStatement);
+memberRouter.post('/:id/settlement', requirePermission('members.archive'), controller.startSettlement);
+memberRouter.post('/:id/settlement/payments', requirePermission('finance.write'), controller.recordSettlementPayment);
+memberRouter.post('/:id/settlement/close', requirePermission('members.archive'), controller.closeSettlement);

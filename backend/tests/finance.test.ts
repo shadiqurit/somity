@@ -54,6 +54,7 @@ afterAll(async () => {
   await db.investment.deleteMany({ where: scoped });
   await db.financialTransaction.deleteMany({ where: { ...scoped, type: 'REVERSAL' } });
   await db.financialTransaction.deleteMany({ where: scoped });
+  await db.memberSettlement.deleteMany({ where: scoped });
   await db.ledgerAccount.deleteMany({ where: scoped });
   await db.financePolicy.deleteMany({ where: scoped });
   await db.auditLog.deleteMany({ where: { OR: [scoped, { actorId: { in: users } }] } });
@@ -394,6 +395,116 @@ describe('Phase 2 financial workflow', () => {
     expect(statement.body.closingBalance).toBe('0.00');
     expect(statement.body.total).toBe(3);
     expect(await db.auditLog.count({ where: { societyId, entityId: created.body.id, action: 'MEMBER_CLOSED' } })).toBe(1);
+  });
+
+  it('settles savings and individual loans and reconciles the detailed statement after closing', async () => {
+    const admin = headers('SOCIETY_ADMIN');
+    const accountant = headers('ACCOUNTANT');
+    const member = await db.member.create({ data: {
+      societyId, memberNo: `SETTLE-${tag}`, fullName: 'Final Settlement Member', phone: '01700000000',
+      address: 'Dhaka', joinedAt: new Date('2026-01-01'),
+    } });
+    const account = await request(app).post('/api/finance/accounts').set(admin)
+      .send({ code: 'FINAL-SETTLEMENT', name: 'Final settlement cash', kind: 'CASH' }).expect(201);
+    const path = `/api/members/${member.id}/settlement`;
+    const fields = { cashAccountId: account.body.id, effectiveDate: '2026-11-09' };
+    const paymentDate = '2026-11-10';
+    const overview = () => request(app).get(path).set(accountant).expect(200);
+    const statement = () => request(app).get(`${path}/statement`).set(accountant);
+    const start = () => request(app).post(path).set(admin);
+    const close = () => request(app).post(`${path}/close`).set(admin);
+    const submitMember = (data: Record<string, unknown>) => request(app).post('/api/finance/transactions')
+      .set(accountant).set('Idempotency-Key', randomUUID()).send({ ...fields, ...data });
+    const pay = (loanId: string | null, amount: string, key = randomUUID()) => request(app).post(`${path}/payments`)
+      .set(accountant).set('Idempotency-Key', key).send({ ...fields, effectiveDate: paymentDate, loanId, amount, reference: 'Settlement receipt' });
+    const post = async (data: Record<string, unknown>) => {
+      const pending = await submitMember(data).expect(201);
+      const response = await approve(pending.body.id);
+      expect(response.status).toBe(200);
+      return response.body;
+    };
+
+    const deposit = await submitMember({ type: 'DEPOSIT', memberId: member.id, amount: '200.00' }).expect(201);
+    await start().expect(409);
+    expect((await statement().expect(200)).body.items).toEqual([]);
+    expect((await approve(deposit.body.id)).status).toBe(200);
+    const loanInput = { type: 'LOAN_DISBURSEMENT', memberId: member.id, installmentCount: 3, firstDueDate: fields.effectiveDate };
+    const firstLoan = await post({ ...loanInput, amount: '60.00' });
+    const secondLoan = await post({ ...loanInput, amount: '25.00' });
+    await post({ type: 'LOAN_REPAYMENT', loanId: firstLoan.loanId, amount: '10.00' });
+
+    await request(app).get(path).set(headers('ADMIN', otherSocietyId)).expect(404);
+    await request(app).post(path).set(accountant).expect(403);
+    const started = await start().expect(200);
+    expect(started.body.status).toBe('OPEN');
+    expect(started.body.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ loanId: null, due: '200.00', paid: '0.00' }),
+      expect.objectContaining({ loanId: firstLoan.loanId, due: '50.00', paid: '0.00' }),
+      expect.objectContaining({ loanId: secondLoan.loanId, due: '25.00', paid: '0.00' }),
+    ]));
+    await submitMember({ type: 'LOAN_REPAYMENT', loanId: firstLoan.loanId, amount: '1.00' }).expect(409);
+    await close().expect(409);
+
+    const key = randomUUID();
+    const competing = await Promise.all([pay(firstLoan.loanId, '30', key), pay(firstLoan.loanId, '30', key)]);
+    expect(competing.map(response => response.status)).toEqual([201, 201]);
+    expect(competing[0]!.body.id).toBe(competing[1]!.body.id);
+    await pay(firstLoan.loanId, '20.01').expect(409);
+    expect((await overview()).body.lines).toContainEqual(expect.objectContaining({
+      loanId: firstLoan.loanId, paid: '0.00', pending: '30.00', available: '20.00',
+    }));
+    const partialPayment = competing[0]!.body;
+    expect((await approve(partialPayment.id)).status).toBe(200);
+    const correction = await request(app).post(`/api/finance/transactions/${partialPayment.id}/reversal`)
+      .set(accountant).set('Idempotency-Key', randomUUID())
+      .send({ effectiveDate: paymentDate, note: 'Correct settlement receipt' }).expect(201);
+    expect((await approve(correction.body.id)).status).toBe(200);
+    expect((await overview()).body.lines).toContainEqual(expect.objectContaining({
+      loanId: firstLoan.loanId, paid: '0.00', remaining: '50.00',
+    }));
+
+    await db.member.update({ where: { id: member.id }, data: { status: 'INACTIVE' } });
+    const repayment1 = await pay(firstLoan.loanId, '50').expect(201);
+    const repayment2 = await pay(secondLoan.loanId, '25').expect(201);
+    const refund = await pay(null, '200').expect(201);
+    expect((await approve(refund.body.id)).status).toBe(409);
+    for (const item of [repayment1, repayment2, refund]) expect((await approve(item.body.id)).status).toBe(200);
+
+    const closed = await close().expect(200);
+    expect(closed.body).toMatchObject({ status: 'CLOSED', pendingTransactions: 0 });
+    expect(closed.body.closedAt).toEqual(expect.any(String));
+    expect(closed.body.lines.map((line: { remaining: string }) => line.remaining)).toEqual(['0.00', '0.00', '0.00']);
+    expect(closed.body.payments).toHaveLength(5);
+    expect(closed.body.payments).toContainEqual(expect.objectContaining({ amount: '200.00', type: 'WITHDRAWAL', status: 'POSTED' }));
+    expect((await close().expect(200)).body.closedAt).toBe(closed.body.closedAt);
+    await pay(null, '1').expect(404);
+    expect(await db.auditLog.count({ where: { societyId, entityId: member.id, action: 'MEMBER_SETTLEMENT_COMPLETED' } })).toBe(1);
+
+    await request(app).get(`${path}/statement`).set(headers('ADMIN', otherSocietyId)).expect(404);
+    await request(app).get(`${path}/statement`).set(headers('MEMBER')).expect(403);
+    await statement().query({ from: paymentDate, to: fields.effectiveDate }).expect(422);
+    const full = (await statement().expect(200)).body;
+    expect(full.total).toBe(9);
+    expect(full.items).toContainEqual(expect.objectContaining({
+      id: deposit.body.id, paidByMember: '200.00', paidBySociety: '0.00', savingsAfter: '200.00', loanAfter: '0.00', settlement: false,
+    }));
+    expect(full.items).toContainEqual(expect.objectContaining({
+      id: refund.body.id, paidByMember: '0.00', paidBySociety: '200.00', savingsAfter: '0.00', loanAfter: '0.00', settlement: true,
+    }));
+    const untilPayments = (await statement().query({ to: fields.effectiveDate }).expect(200)).body;
+    expect(untilPayments).toMatchObject({ total: 4, savings: { closing: '200.00' }, loans: { closing: '75.00' } });
+    const dateFilter = { from: paymentDate, to: paymentDate };
+    const period = (await statement().query(dateFilter).expect(200)).body;
+    expect(period.savings).toEqual({ opening: '200.00', deposits: '0.00', withdrawals: '200.00', closing: '0.00' });
+    expect(period.loans).toEqual({ opening: '75.00', disbursed: '30.00', repaid: '105.00', closing: '0.00' });
+    expect(period.items).toContainEqual(expect.objectContaining({
+      id: correction.body.id, paidBySociety: '30.00', loanAfter: '75.00', loanNumber: firstLoan.transactionNo,
+      reversalOf: { transactionNo: partialPayment.transactionNo, type: 'LOAN_REPAYMENT' },
+    }));
+    const secondPage = (await statement().query({ ...dateFilter, pageSize: 2, page: 2 }).expect(200)).body;
+    expect(secondPage.items).toEqual(period.items.slice(2, 4));
+    const olderPage = (await statement().query({ pageSize: 3, page: 3 }).expect(200)).body;
+    expect(olderPage.items).toEqual(full.items.slice(6));
   });
 
   it('limits rejected transaction deletion to admins and retains the complete audit history', async () => {

@@ -2,6 +2,7 @@ export interface Account { id: string; code: string; name: string; kind: string;
 export interface Policy { version: number; requiredApprovals: number; allowSelfApproval: boolean; }
 export interface FinancialTransaction {
   id: string; transactionNo: string; type: string; status: 'PENDING' | 'POSTED' | 'REJECTED' | 'CANCELLED'; amount: string; effectiveDate: string; note: string; reference: string; requiredApprovals: number; allowSelfApproval: boolean; policyVersion: number; createdById: string; createdAt: string; postedAt: string | null;
+  settlementId: string | null;
   member: { id: string; memberNo: string; fullName: string } | null; details: Record<string, string | number> | null; cashAccount: { id: string; name: string; kind: string }; createdBy: { id: string; name: string };
   investment: { title: string } | null;
   decisions: { id: string; step: number; approverId: string; decision: string; comment: string; createdAt: string; approver: { name: string } }[];

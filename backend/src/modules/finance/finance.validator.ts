@@ -8,9 +8,13 @@ const effectiveDate = z.iso.date().refine(value => value <= todayDhaka(), 'Futur
 export const transactionTypes = ['DEPOSIT', 'WITHDRAWAL', 'LOAN_DISBURSEMENT', 'LOAN_REPAYMENT', 'INVESTMENT_PURCHASE', 'INVESTMENT_RETURN', 'EXPENSE', 'TRANSFER', 'OTHER_INCOME'] as const;
 const optionalId = z.union([idSchema, z.literal(''), z.null()]).optional().transform(v => v || null);
 const nonnegativeMoney = z.string().regex(/^(0|[1-9]\d{0,17})(\.\d{1,2})?$/);
-export const transactionSchema = z.object({
-  type: z.enum(transactionTypes), memberId: optionalId, cashAccountId: idSchema, amount: moneySchema, effectiveDate,
+const paymentFields = {
+  cashAccountId: idSchema, amount: moneySchema, effectiveDate,
   reference: z.string().trim().max(120).default(''), note: z.string().trim().max(500).default(''),
+};
+export const settlementPaymentSchema = z.object({ ...paymentFields, loanId: optionalId }).strict();
+export const transactionSchema = z.object({
+  type: z.enum(transactionTypes), memberId: optionalId, ...paymentFields,
   loanId: optionalId, investmentId: optionalId, destinationAccountId: optionalId,
   installmentCount: z.number().int().min(1).max(600).optional(), firstDueDate: z.iso.date().optional(),
   title: z.string().trim().max(120).optional(), counterparty: z.string().trim().max(120).optional(),
@@ -38,7 +42,11 @@ export const transactionLogSchema = z.object({
   transactionNo: z.string().trim().min(1).max(40).optional(),
   action: z.enum(['FINANCE_REQUESTED', 'FINANCE_REVERSAL_REQUESTED', 'FINANCE_APPROVED', 'FINANCE_REJECTED', 'FINANCE_POSTED', 'FINANCE_CANCELLED', 'FINANCE_DELETED']).optional(),
 });
-export const listSchema = dateRangeSchema.safeExtend({ page: z.coerce.number().int().min(1).max(100000).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), status: z.enum(['PENDING', 'POSTED', 'REJECTED', 'CANCELLED']).optional(), type: z.enum([...transactionTypes, 'REVERSAL']).optional(), memberId: idSchema.optional(), scope: z.literal('income').optional() });
+export const statementListSchema = dateRangeSchema.safeExtend({
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export const listSchema = statementListSchema.safeExtend({ status: z.enum(['PENDING', 'POSTED', 'REJECTED', 'CANCELLED']).optional(), type: z.enum([...transactionTypes, 'REVERSAL']).optional(), memberId: idSchema.optional(), scope: z.literal('income').optional() });
 export type TransactionInput = z.infer<typeof transactionSchema>;
 export type FinanceListInput = z.infer<typeof listSchema>;
 

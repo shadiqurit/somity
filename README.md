@@ -6,6 +6,8 @@ Super Admin manages the platform and its societies. Admin can handle financial t
 
 Finance covers member deposits and withdrawals, cash and bank accounts, one- or two-person approvals, a balanced ledger, approved reversals and private member statements. It also covers principal-only loans, investments and returns, other income, expenses, internal transfers and product dashboards. The Bank dashboard shows date-filtered combined balances and external flows alongside per-account movements. See [the Phase 2 guide](docs/PHASE2.md) and [the financial modules guide](docs/FINANCIAL_MODULES.md).
 
+Use **Members → Member profile → Final settlement** to record what Somity owes for savings and what the member owes on each loan. Approved refunds and repayments appear in the settlement history. Close the membership once every balance is zero and all requests are resolved. See [the settlement workflow](docs/FINANCIAL_MODULES.md#member-final-settlement).
+
 ## Setup
 
 Requires Node 22.12+ (Node 24 recommended), npm, and MySQL 8.0.16+.

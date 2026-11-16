@@ -6,6 +6,7 @@ import { hashPassword } from '../../utils/password.js';
 import { assertActiveSociety, lockActiveSociety } from '../../services/tenant.js';
 import { audit } from '../../services/audit.js';
 import { assertMemberSettled } from '../finance/finance.service.js';
+import { describeSettlement, findSettlement, memberDues, pendingMemberTransactions } from '../finance/finance.settlement.js';
 import { memberDirectoryOmit, memberInclude, presentMember } from './member.repository.js';
 import type { MemberInput, updateMemberSchema } from './member.validator.js';
 import type { z } from 'zod';
@@ -51,6 +52,58 @@ async function disableMemberLogin(tx: Prisma.TransactionClient, societyId: strin
   if (userId) await tx.societyMembership.update({ where: { societyId_userId: { societyId, userId } }, data: { isActive: false } });
 }
 
+async function completeSettlement(tx: Prisma.TransactionClient, societyId: string, memberId: string, actorId: string) {
+  const settlement = await findSettlement(tx, societyId, memberId);
+  if (!settlement || settlement.closedAt) return;
+  await tx.memberSettlement.update({ where: { id: settlement.id }, data: { closedAt: new Date() } });
+  await audit(tx, actorId, 'MEMBER_SETTLEMENT_COMPLETED', 'member', memberId, { settlementId: settlement.id }, societyId);
+}
+
+export function settlement(societyId: string, memberId: string) {
+  return db.$transaction(tx => describeSettlement(tx, societyId, memberId), {
+    isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+  });
+}
+
+export async function startSettlement(societyId: string, memberId: string, actorId: string) {
+  await db.$transaction(async tx => {
+    await lockActiveSociety(tx, societyId);
+    const member = await tx.member.findUnique({
+      where: { societyId_id: { societyId, id: memberId } },
+      select: { status: true, archivedAt: true },
+    });
+    if (!member || member.archivedAt) throw new AppError(404, 'Member not found');
+    if (member.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
+    if (await findSettlement(tx, societyId, memberId)) return;
+    if (await pendingMemberTransactions(tx, societyId, memberId)) {
+      throw new AppError(409, 'Resolve all pending member transactions before starting final settlement');
+    }
+    const dues = await memberDues(tx, societyId, memberId);
+    const record = await tx.memberSettlement.create({ data: { societyId, memberId, dues } });
+    await audit(tx, actorId, 'MEMBER_SETTLEMENT_STARTED', 'member', memberId, { settlementId: record.id, dues }, societyId);
+  });
+  return settlement(societyId, memberId);
+}
+
+export async function closeSettlement(societyId: string, memberId: string, actorId: string) {
+  await db.$transaction(async tx => {
+    await lockActiveSociety(tx, societyId);
+    const record = await findSettlement(tx, societyId, memberId);
+    if (!record) throw new AppError(404, 'Member settlement not found');
+    if (record.closedAt) return;
+    await assertMemberSettled(tx, societyId, memberId);
+    const member = await tx.member.update({
+      where: { societyId_id: { societyId, id: memberId } },
+      data: { status: 'CLOSED', version: { increment: 1 } },
+      select: { userId: true },
+    });
+    await disableMemberLogin(tx, societyId, member.userId);
+    await completeSettlement(tx, societyId, memberId, actorId);
+    await audit(tx, actorId, 'MEMBER_CLOSED', 'member', memberId, { settlementId: record.id }, societyId);
+  });
+  return settlement(societyId, memberId);
+}
+
 export async function create(input: MemberInput, actorId: string, societyId: string) {
   return db.$transaction(async tx => {
     await assertActiveSociety(tx, societyId);
@@ -76,7 +129,10 @@ export async function update(id: string, input: z.infer<typeof updateMemberSchem
     if (!claimed.count) throw new AppError(409, 'This member changed. Reload the profile and try again');
     await tx.nominee.deleteMany({ where: { memberId: id, societyId } });
     await tx.nominee.createMany({ data: input.nominees.map(n => ({ ...n, memberId: id, societyId })) });
-    if (closing) await disableMemberLogin(tx, societyId, before.userId);
+    if (closing) {
+      await disableMemberLogin(tx, societyId, before.userId);
+      await completeSettlement(tx, societyId, id, actorId);
+    }
     await audit(tx, actorId, closing ? 'MEMBER_CLOSED' : 'MEMBER_UPDATED', 'member', id, { before: JSON.parse(JSON.stringify(memberAuditSnapshot(before))), after: memberAuditSnapshot(input) }, societyId);
     return presentMember(await tx.member.findUniqueOrThrow({ where: { societyId_id: { societyId, id } }, include: memberInclude }));
   });
@@ -91,6 +147,7 @@ export async function archive(id: string, version: number, actorId: string, soci
     const claimed = await tx.member.updateMany({ where: { id, societyId, version, archivedAt: null }, data: { archivedAt: new Date(), status: 'CLOSED', version: { increment: 1 } } });
     if (!claimed.count) throw new AppError(409, 'This member changed. Reload and try again');
     await disableMemberLogin(tx, societyId, before.userId);
+    await completeSettlement(tx, societyId, id, actorId);
     await audit(tx, actorId, 'MEMBER_ARCHIVED', 'member', id, { memberNo: before.memberNo }, societyId);
   });
 }

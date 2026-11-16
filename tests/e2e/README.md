@@ -1,6 +1,6 @@
 # Browser verification
 
-`finance.spec.ts` covers account creation, deposit submission as Accountant, approval as Approver, posted ledger, product dashboards, and the member's private savings statement and loans. The Bank page checks its combined totals and per-account summary. The suite captures screenshots, including a 390px viewport, and checks for page errors and overflow. Fixtures use the separate `_test` schema and private uploads use `test-results/e2e-private-storage`.
+`finance.spec.ts` covers account creation, deposit submission as Accountant, approval as Approver, posted ledger, product dashboards, and the member's private savings statement and loans. The Bank page checks combined totals and per-account movements. The final settlement flow records a loan repayment and savings refund, approves both, closes the membership and verifies the retained record. The suite captures screenshots, including a 390px viewport, and checks for page errors and overflow. Fixtures use the separate `_test` schema and private uploads use `test-results/e2e-private-storage`.
 
 Install dependencies and apply all committed migrations to `TEST_DATABASE_URL` using the [root README procedure](../../README.md#verification). The default browser channel is Chrome. To use Microsoft Edge in PowerShell, set `$env:PLAYWRIGHT_CHANNEL = 'msedge'`. Run `npm run test:e2e` from the root, or run `npm run test:e2e -- tests/e2e/finance.spec.ts` for the finance workflow alone.
 

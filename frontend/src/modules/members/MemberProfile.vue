@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'; import { useRoute, useRouter } from 'vue-router'; import { ArrowLeft, Mail, MapPin, Pencil, Phone, ShieldCheck, UserRound, Archive } from 'lucide-vue-next';
 import MemberEntryModal from './MemberEntryModal.vue';
+import MemberSettlement from './MemberSettlement.vue';
 import MemberStatement from '../finance/MemberStatement.vue';
 import ProductReports from '../finance/ProductReports.vue';
 import { api, errorMessage } from '../../services/api'; import { useAuthStore } from '../../stores/auth'; import { date } from '../../utils/format'; import type { Member } from './types';
@@ -10,6 +11,7 @@ const editorOpen = computed(() => route.query.entry === 'edit' && auth.can('memb
 async function closeEditor() { const { entry, ...query } = route.query; await router.replace({ query }); }
 async function saved(_member: Member, photoError?: string) { success.value = 'Member profile updated successfully.'; await closeEditor(); await load(); if (photoError) error.value = `Profile saved, but photo change failed: ${photoError}. Retry below.`; }
 async function load() { loading.value = true; error.value = ''; try { member.value = (await api.get<Member>(own.value ? '/members/me' : `/members/${route.params.id}`)).data; } catch (e) { error.value = errorMessage(e); } finally { loading.value = false; } }
+async function closed() { success.value = 'Final settlement completed and membership closed.'; await load(); }
 async function archive() { if (!member.value) return; busy.value = true; actionError.value = ''; try { await api.delete(`/members/${member.value.id}`, { data: { version: member.value.version } }); await router.push('/members'); } catch (e) { actionError.value = errorMessage(e); } finally { busy.value = false; } }
 async function createLogin() { if (!member.value) return; busy.value = true; actionError.value = ''; try { await api.post(`/members/${member.value.id}/login`, { email: email.value, password: password.value }); loginOpen.value = false; password.value = ''; success.value = 'Member login created. Share the temporary password privately with the member.'; await load(); } catch (e) { actionError.value = errorMessage(e); } finally { busy.value = false; } }
 async function uploadPhoto(file: File) { if (!member.value) return; busy.value = true; error.value = ''; try { const body = new FormData(); body.append('photo', file); await api.post(`/members/${member.value.id}/photo`, body); await load(); } catch (e) { error.value = errorMessage(e); } finally { busy.value = false; } }
@@ -23,6 +25,7 @@ async function removePhoto() {
 onMounted(load);
 </script>
 <template><RouterLink v-if="!own" to="/members" class="back-link"><ArrowLeft :size="16" /> Back to members</RouterLink><div class="page-heading"><div><span class="eyebrow">{{ own ? 'YOUR PERSONAL SPACE' : 'MEMBER MANAGEMENT' }}</span><h1>{{ own ? 'My dashboard' : 'Member profile' }}<span class="heading-dot">.</span></h1><p>{{ own ? 'Your membership details, always close at hand.' : 'The person behind the membership.' }}</p></div><div v-if="member && auth.can('members.write') && !own" class="button-row"><AppButton v-if="auth.can('members.archive')" variant="secondary" @click="archiveOpen = true; actionError = ''"><Archive :size="16" /> Archive</AppButton><AppButton @click="router.push({ query: { ...route.query, entry: 'edit' } })"><Pencil :size="18" /> Edit profile</AppButton></div></div><div v-if="error" class="alert error" role="alert">{{ error }} <AppButton variant="ghost" @click="load">Reload</AppButton></div><div v-if="route.query.photoError" class="alert error" role="alert">Profile saved. Photo change failed: {{ route.query.photoError }}. Retry below.</div><div v-if="success" class="alert success" role="status">{{ success }}</div><LoadingState v-if="loading" /><template v-else-if="member"><section class="panel profile-hero"><MemberAvatar :name="member.fullName" :document-id="member.documents[0]?.id" large /><div><span class="member-number">{{ member.memberNo }}</span><h2>{{ member.fullName }}</h2><p>Member since {{ date(member.joinedAt) }}</p></div><StatusBadge :status="member.status" /></section>
+  <MemberSettlement v-if="!own && auth.can('finance.read')" :member-id="member.id" @closed="closed" />
   <div class="profile-grid">
     <section class="panel profile-info">
       <div class="panel-heading"><h2>Personal information</h2><UserRound :size="19" /></div>

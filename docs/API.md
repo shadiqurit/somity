@@ -78,6 +78,20 @@ All protected business endpoints require initial password change to be complete.
 
 Photo changes serialize on the member row and increment its version. A failed image validation leaves the current photo intact. Replacement commits the new photo, old metadata deletion, audit event and file-cleanup jobs together; old bytes are deleted only after commit. Removal is harmless to retry when no photo remains and never deletes other document kinds. Physical deletion is attempted before returning; failures remain queued in `file_deletions` and retry at API startup and every minute. The cleanup migration also queues legacy superseded photos while retaining the latest one per member. In the edit modal, removal waits for Save; Cancel and Keep current photo preserve the existing image.
 
+## Member final settlement
+
+These routes are scoped to the active society. A settlement captures posted savings owed to the member and outstanding principal per loan. It retains its original dues and linked payment attempts after closure. All amounts are decimal strings.
+
+| Method and path under `/api` | Permission | Purpose |
+| --- | --- | --- |
+| GET `/members/:id/settlement` | finance.read | Returns status, opened/closed dates, pending count, per-item due, paid, pending, remaining and available amounts, and linked payment history. Before starting it shows current dues. |
+| GET `/members/:id/settlement/statement` | finance.read | Returns opening balances, movements and closing balances for savings and loan principal. Each posted transaction shows who paid, the cash or bank account, any related loan or reversal, and both balances after the transaction. Accepts optional `from`, `to`, `page` and `pageSize` (maximum 100). Newest entries appear first. |
+| POST `/members/:id/settlement` | members.archive | Captures the opening dues. Any pending member transaction blocks opening. An already open settlement is returned as-is. |
+| POST `/members/:id/settlement/payments` | finance.write | Queues a normal approval request with `cashAccountId`, `amount`, `effectiveDate`, optional `reference` and `note`, and `loanId` for a repayment. Omit `loanId` or send null for a savings refund. Requires `Idempotency-Key`. |
+| POST `/members/:id/settlement/close` | members.archive | Requires zero posted savings and outstanding loan principal and no pending member transactions. Retains the settlement, closes the membership and disables its login. Repeating a completed close returns the same record. |
+
+Settlement payment requests use the existing finance decision, cancellation and reversal routes. Paid amounts are posted payments less posted reversals. Pending originals reserve the amount that can still be submitted. While settlement is open, regular finance submission and historical reversals for that member are blocked to preserve the opening dues. Settlement payments themselves can be reversed before closure.
+
 ## Member input
 
 ```json

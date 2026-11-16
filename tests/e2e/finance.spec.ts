@@ -39,6 +39,7 @@ test.afterAll(async () => {
   await db.investment.deleteMany({ where: { societyId } });
   await db.financialTransaction.deleteMany({ where: { societyId, type: 'REVERSAL' } });
   await db.financialTransaction.deleteMany({ where: { societyId } });
+  await db.memberSettlement.deleteMany({ where: { societyId } });
   await db.ledgerAccount.deleteMany({ where: { societyId } });
   await db.financePolicy.deleteMany({ where: { societyId } });
   await db.auditLog.deleteMany({ where: { OR: [{ societyId }, { actorId: { in: userIds } }] } });
@@ -92,6 +93,15 @@ test('cash account, deposit request, approval, ledger and private member stateme
     expenses: ['Expense'],
     income: ['Other income', 'Investment profit'],
   };
+  async function approveRequest(transactionNo: string) {
+    await approverPage.goto('/approvals');
+    const row = approverPage.getByRole('row').filter({ hasText: transactionNo });
+    await row.getByRole('button', { name: 'Review', exact: true }).click();
+    const review = approverPage.getByRole('dialog', { name: transactionNo, exact: true });
+    await review.getByRole('button', { name: 'Approve request', exact: true }).click();
+    await expect(review.getByText('Posted', { exact: true })).toBeVisible();
+    await review.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  }
   async function submitProduct(menu: keyof typeof optionsByMenu, type:string, amount:string, fill:(dialog:ReturnType<typeof page.getByRole>)=>Promise<void>) {
     await page.goto(`/${menu}`); await page.getByRole('button',{name:'New transaction',exact:true}).click(); const dialog=page.getByRole('dialog',{name:'New transaction',exact:true});
     await expect(dialog.getByLabel('Transaction type').locator('option')).toHaveText(optionsByMenu[menu]);
@@ -99,9 +109,7 @@ test('cash account, deposit request, approval, ledger and private member stateme
     await fill(dialog); if(type !== 'INVESTMENT_RETURN' || menu === 'income') await dialog.getByLabel('Amount (BDT)').fill(amount);
     await dialog.getByRole('button',{name:'Submit for approval',exact:true}).click(); await expect(dialog).not.toBeVisible();
     const request=await db.financialTransaction.findFirstOrThrow({where:{societyId,type:type as any,status:'PENDING'},orderBy:{createdAt:'desc'}});
-    await approverPage.goto('/approvals'); const row=approverPage.getByRole('row').filter({hasText:request.transactionNo}); await row.getByRole('button',{name:'Review',exact:true}).click();
-    const review=approverPage.getByRole('dialog'); await review.getByRole('button',{name:'Approve request',exact:true}).click(); await expect(review.getByText('Posted',{exact:true})).toBeVisible();
-    await review.getByRole('button',{name:'Close dialog',exact:true}).click();
+    await approveRequest(request.transactionNo);
     return db.financialTransaction.findUniqueOrThrow({where:{id:request.id}});
   }
   const loanRequest=await submitProduct('loans','LOAN_DISBURSEMENT','120.01',async dialog=>{await dialog.getByLabel('Member',{exact:true}).selectOption(memberId);await dialog.getByLabel('Number of monthly installments').fill('3');await dialog.getByLabel('First installment date').fill('2027-01-31');});
@@ -223,6 +231,69 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await expect(approverPage.getByRole('row').filter({ hasText: duplicate.transactionNo }).filter({ hasText: 'Rejected a transaction' })).toBeVisible();
   await expect(approverPage.getByLabel('Activity scope')).toHaveCount(0);
   await expect(approverPage.getByRole('cell', { name: /Browser MEMBER/ })).toHaveCount(0);
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await signOut(page);
+  await signIn(page, 'SOCIETY_ADMIN');
+  await submitProduct('income', 'OTHER_INCOME', '125', async dialog => {
+    await dialog.getByLabel('Note (optional)').fill('Community hall rent received');
+  });
+  await page.goto(`/members/${memberId}`);
+  const settlement = page.getByRole('region', { name: 'Final settlement' });
+  await expect(settlement.getByRole('listitem').filter({ hasText: 'Somity pays member' })).toContainText('৳ 1,500.25');
+  await expect(settlement.getByRole('listitem').filter({ hasText: 'Member pays Somity' })).toContainText('৳ 80.01');
+  await settlement.getByRole('button', { name: 'Start final settlement' }).click();
+
+  async function recordSettlementPayment(button: string, dialogName: string, amount: string, reference: string) {
+    await settlement.getByRole('button', { name: button, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: dialogName, exact: true });
+    await expect(dialog.getByLabel('Payment amount (BDT)')).toHaveValue(amount);
+    await dialog.getByLabel('Cash or bank account').selectOption(cash.id);
+    await dialog.getByLabel('Receipt or reference').fill(reference);
+    await dialog.getByRole('button', { name: 'Submit payment' }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(settlement.getByRole('listitem').filter({ hasText: reference })).toContainText('Pending');
+    await expect(settlement.getByRole('button', { name: 'Close membership' })).toHaveCount(0);
+    const transaction = await db.financialTransaction.findFirstOrThrow({ where: { societyId, reference } });
+    await approveRequest(transaction.transactionNo);
+    await settlement.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await expect(settlement.getByRole('listitem').filter({ hasText: reference })).toContainText('Posted');
+  }
+
+  await recordSettlementPayment('Record repayment', 'Record loan repayment', '80.01', 'Final loan receipt');
+  await recordSettlementPayment('Record refund', 'Record savings refund', '1500.25', 'Final savings payout');
+  await settlement.getByRole('button', { name: 'Close membership' }).click();
+  await page.getByRole('dialog', { name: 'Close this membership?' }).getByRole('button', { name: 'Close membership' }).click();
+  await expect(page.getByText('Final settlement completed and membership closed.', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(settlement.getByText(/Membership closed on/)).toBeVisible();
+  await expect(settlement.getByText('Final savings payout', { exact: false })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('final-settlement-mobile.png'), fullPage: true, animations: 'disabled' });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+  await settlement.getByRole('button', { name: 'View dues statement' }).click();
+  const dues = page.getByRole('dialog', { name: 'Dues and receivables' });
+  const savingsTotals = dues.getByRole('article').filter({ hasText: 'Somity owes the member' });
+  const loanTotals = dues.getByRole('article').filter({ hasText: 'Member owes Somity' });
+  await expect(savingsTotals).toContainText('৳ 1,500.25');
+  await expect(loanTotals).toContainText('৳ 120.01');
+  const statementEntries = dues.getByRole('listitem');
+  await expect(statementEntries.filter({ hasText: 'Receipt 123' })).toContainText('Savings deposit');
+  const amountPaidBySociety = statementEntries.filter({ hasText: 'Final savings payout' }).locator('dl > div').filter({ hasText: 'Somity paid' });
+  await expect(amountPaidBySociety.getByText('৳ 1,500.25', { exact: true })).toBeVisible();
+  const amountPaidByMember = statementEntries.filter({ hasText: 'Final loan receipt' }).locator('dl > div').filter({ hasText: 'Member paid' });
+  await expect(amountPaidByMember.getByText('৳ 80.01', { exact: true })).toBeVisible();
+  await dues.getByLabel('To date').fill('2026-01-01');
+  await dues.getByRole('button', { name: 'Apply dates' }).click();
+  await expect(dues.getByText('No posted member transactions in this period.')).toBeVisible();
+  await dues.getByRole('button', { name: 'Close dialog' }).click();
+  await page.getByRole('button', { name: 'বাংলা', exact: true }).click();
+  await page.getByRole('button', { name: 'দেনা–পাওনার হিসাব দেখুন' }).click();
+  const banglaDues = page.getByRole('dialog', { name: 'দেনা–পাওনার বিস্তারিত হিসাব' });
+  await expect(banglaDues.getByRole('heading', { name: 'সদস্য সমিতির কাছে পাবেন' })).toBeVisible();
+  await expect(banglaDues.getByText('খাতায় অন্তর্ভুক্ত সদস্য লেনদেন')).toBeVisible();
+  await banglaDues.screenshot({ path: testInfo.outputPath('member-dues-bangla-mobile.png'), animations: 'disabled' });
   await approverContext.close();
   expect(errors).toEqual([]);
 });

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { Plus, Wallet, Landmark, ClipboardCheck, ArrowDownUp, ArrowUpRight, Settings } from 'lucide-vue-next';
-import { api, errorMessage } from '../../services/api';
+import { api, errorMessage, newIdempotencyKey } from '../../services/api';
 import { useAuthStore } from '../../stores/auth';
 import { useLocale } from '../../composables/useLocale';
 import { date } from '../../utils/format';
@@ -131,7 +131,7 @@ function openEntry(preset?: EntryPreset) {
   entryPreset = preset;
   Object.assign(form, blankForm(), { type: initial.value, loanId: preset?.loanId ?? '', investmentId: preset?.investmentId ?? '' });
   memberSearch.value = ''; memberOptions.value = []; productOptions.value = [];
-  entryKey = crypto.randomUUID(); entrySignature = ''; actionError.value = ''; entryOpen.value = true;
+  entryKey = newIdempotencyKey(); entrySignature = ''; actionError.value = ''; entryOpen.value = true;
 }
 watch([entryOpen, needsMember], ([open, member], _, onCleanup) => {
   if (!open || !member) return;
@@ -181,7 +181,7 @@ async function saveEntry() {
   });
   if(form.type==='EXPENSE')Object.assign(payload,{category:form.category,payee:form.payee});
   if(form.type==='TRANSFER')payload.destinationAccountId=form.destinationAccountId;
-  const signature = JSON.stringify(payload); if (entrySignature && entrySignature !== signature) entryKey = crypto.randomUUID(); entrySignature = signature;
+  const signature = JSON.stringify(payload); if (entrySignature && entrySignature !== signature) entryKey = newIdempotencyKey(); entrySignature = signature;
   busy.value = true; actionError.value = '';
   try { await api.post('/finance/transactions', payload, { headers: { 'Idempotency-Key': entryKey } }); entryOpen.value = false; notice.value = 'Request submitted for approval. Balances change only after final approval.'; await load(); }
   catch (e) { actionError.value = errorMessage(e); } finally { busy.value = false; }
@@ -217,7 +217,7 @@ async function deleteRejected() {
 async function reverse() {
   if (!selected.value) return;
   const body = { effectiveDate: reversalDate.value, note: reversalNote.value };
-  const signature = JSON.stringify(body); if (reverseSignature && signature !== reverseSignature) reverseKey = crypto.randomUUID(); reverseSignature = signature;
+  const signature = JSON.stringify(body); if (reverseSignature && signature !== reverseSignature) reverseKey = newIdempotencyKey(); reverseSignature = signature;
   busy.value = true; actionError.value = '';
   try { const { data } = await api.post(`/finance/transactions/${selected.value.id}/reversal`, body, { headers: { 'Idempotency-Key': reverseKey } }); selected.value = data; reverseOpen.value = false; notice.value = 'Reversal requested. It needs approval before balances change.'; await load(); }
   catch (e) { actionError.value = errorMessage(e); } finally { busy.value = false; }
@@ -230,14 +230,15 @@ function transactionLabel(row: FinancialTransaction) {
     const label = t(sourceType === 'INVESTMENT_RETURN' ? 'Investment profit' : 'Other income');
     return row.type === 'REVERSAL' ? `${t('Reversal')} · ${label}` : label;
   }
-  return t(transactionLabels[row.type as TransactionType] ?? row.type);
+  const label = t(transactionLabels[row.type as TransactionType] ?? row.type);
+  return row.settlementId ? `Final settlement · ${label}` : label;
 }
 function incomeAmount(row: FinancialTransaction) {
   const sourceType = row.reversalOf?.type ?? row.type;
   const amount = sourceType === 'INVESTMENT_RETURN' ? String(row.details?.profit ?? '0') : row.amount;
   return bdt(row.type === 'REVERSAL' ? `-${amount}` : amount);
 }
-function beginReversal() { reverseOpen.value = true; reversalNote.value = ''; reversalDate.value = todayDhaka(); reverseKey = crypto.randomUUID(); reverseSignature = ''; actionError.value = ''; }
+function beginReversal() { reverseOpen.value = true; reversalNote.value = ''; reversalDate.value = todayDhaka(); reverseKey = newIdempotencyKey(); reverseSignature = ''; actionError.value = ''; }
 function openAccount() { Object.assign(accountForm, { code: '', name: '', kind: 'CASH', bankName: '', accountNumberLast4: '' }); actionError.value = ''; accountOpen.value = true; }
 async function saveAccount() {
   busy.value = true; actionError.value = '';

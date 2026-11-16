@@ -29,6 +29,7 @@ The application uses one MySQL database with separate role assignments and busin
 | transaction_entries | Posted debit and credit lines using DECIMAL(20,2). Composite foreign keys enforce tenant consistency. |
 | approval_policies, approval_steps | Versioned society policy and ordered, distinct approver decisions for each request. |
 | loans, investments | Terms and identity of posted loan disbursements and investment purchases. Repayment and return activity uses linked transactions and ledger entries. |
+| member_settlements | One final settlement per member, with a snapshot of opening dues and a closing timestamp. A composite foreign key links each settlement payment and reversal to the same member and society. Paid amounts are derived from linked posted transactions. |
 
 ```mermaid
 erDiagram
