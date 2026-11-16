@@ -15,7 +15,8 @@ interface Account { id: string; name: string; email: string; isActive: boolean; 
 const auth = useAuthStore();
 const router = useRouter();
 const isSuperAdmin = computed(() => auth.user?.isSuperAdmin === true);
-const rows = ref<Account[]>([]); const page = ref(1); const pages = ref(1); const total = ref(0); const loading = ref(false); const busy = ref(false); const open = ref(false); const error = ref(''); const notice = ref('');
+const rows = ref<Account[]>([]); const page = ref(1); const pages = ref(1); const total = ref(0); const loading = ref(false); const busy = ref(false); const error = ref(''); const notice = ref('');
+const accountType = ref<'admin' | 'staff' | null>(null);
 const search = ref('');
 const appliedSearch = ref('');
 const target = ref<Account | null>(null);
@@ -54,8 +55,8 @@ function findAccounts() {
 }
 
 async function saved() {
-  open.value = false;
-  notice.value = 'Staff account created successfully.';
+  notice.value = accountType.value === 'admin' ? 'Admin account created successfully.' : 'Staff account created successfully.';
+  accountType.value = null;
   search.value = appliedSearch.value = '';
   await load(1);
 }
@@ -95,7 +96,10 @@ onMounted(() => load());
     <div><span class="eyebrow">THE RIGHT ACCESS, FOR EVERYONE</span><h1>Team & access<span class="heading-dot">.</span></h1>
       <p>{{ isSuperAdmin ? 'Find login accounts across all societies and set temporary passwords.' : 'Manage staff access and see your society’s login accounts.' }}</p>
     </div>
-    <AppButton v-if="auth.user?.societyId" @click="open = true"><Plus :size="19" /> Add staff account</AppButton>
+    <div class="button-row">
+      <AppButton v-if="isSuperAdmin" @click="accountType = 'admin'"><Plus :size="19" /> Add admin account</AppButton>
+      <AppButton v-if="auth.user?.societyId" :variant="isSuperAdmin ? 'secondary' : 'primary'" @click="accountType = 'staff'"><Plus :size="19" /> Add staff account</AppButton>
+    </div>
   </div>
   <div v-if="notice" class="alert success" role="status">{{ notice }}</div>
   <div v-if="error" class="alert error" role="alert">{{ error }} <AppButton variant="ghost" @click="load()">Retry</AppButton></div>
@@ -112,7 +116,9 @@ onMounted(() => load());
     </AppTable>
   </section>
   <p v-if="auth.user?.societyId" class="under-table-note">Create member accounts from their member profile. Accountants can submit financial requests; Approvers can approve or reject them. Both can view financial records within this society.</p>
-  <AppModal :open="open" title="Add staff account" description="Create a secure login for someone on your team." :busy="busy" @close="open = false"><UserEntryForm v-if="open" @busy="busy = $event" @cancel="open = false" @saved="saved" /></AppModal>
+  <AppModal :open="!!accountType" :title="accountType === 'admin' ? 'Add admin account' : 'Add staff account'" :description="accountType === 'admin' ? 'Admins can handle transactions in every active society.' : `Create a staff login for ${auth.user?.society?.name ?? 'the current society'}.`" :busy="busy" @close="accountType = null">
+    <UserEntryForm v-if="accountType" :key="accountType" :platform-admin="accountType === 'admin'" @busy="busy = $event" @cancel="accountType = null" @saved="saved" />
+  </AppModal>
   <AppModal :open="!!target" title="Set password" :description="target ? `${target.name} (${target.email})` : undefined" :busy="savingPassword" @close="closePasswordDialog">
     <AppForm v-if="target" :busy="savingPassword" :error="passwordError" @submit="savePassword">
       <p class="muted">This signs the user out across all societies. They’ll need to change the temporary password at their next sign-in.</p>

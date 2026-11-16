@@ -39,7 +39,7 @@ beforeAll(async () => {
     societies.push(created.body.id); users.push((await db.user.findUniqueOrThrow({ where: { email } })).id);
     if (letter === 'A') { a = created.body.id; adminA = await login(email, true); } else { b = created.body.id; adminB = await login(email, true); }
   }
-  const adminRole = await db.role.findUniqueOrThrow({ where: { code: 'ADMIN' } });
+  const adminRole = await db.role.findUniqueOrThrow({ where: { code: 'SOCIETY_ADMIN' } });
   const memberRole = await db.role.findUniqueOrThrow({ where: { code: 'MEMBER' } });
   const dual = await db.user.create({ data: { name: 'Shared Identity', email: `${tag}-dual@example.test`, passwordHash: await hashPassword(password), mustChangePassword: false, memberships: { create: [{ societyId: a, roleId: adminRole.id }, { societyId: b, roleId: memberRole.id }] } } }); users.push(dual.id); dualUserId = dual.id;
   dualToken = await login(dual.email);
@@ -59,7 +59,7 @@ afterAll(async () => {
 });
 
 describe('multi-society isolation with MySQL', () => {
-  it('restricts society management to platform superadmin and creates an admin atomically', async () => {
+  it('restricts society management to Super Admin and creates a Society Admin atomically', async () => {
     await request(app).get('/api/societies').set(headers(adminA, a)).expect(403);
     await request(app).post('/api/societies').set(headers(adminA, a)).send({}).expect(403);
     const list = await request(app).get('/api/societies').set(headers(superToken, a)).expect(200);
@@ -67,6 +67,27 @@ describe('multi-society isolation with MySQL', () => {
     await request(app).post('/api/societies').set(headers(superToken, a)).send({ name: 'Must roll back', code: `ROLLBACK-${tag}`, admin: { name: 'Duplicate', email: `${tag}-admin-a@example.test`, password: temporary } }).expect(409);
     expect(await db.society.count({ where: { code: `ROLLBACK-${tag}` } })).toBe(0);
     await request(app).get('/api/members').set({ Authorization: `Bearer ${superToken}` }).expect(400);
+  });
+  it('lets only Super Admin create an Admin with access to all active societies', async () => {
+    const account = { name: 'Cross-society Admin', email: `${tag}-platform-admin@example.test`, password: temporary };
+    await request(app).post('/api/platform/users').set(headers(adminA, a)).send(account).expect(403);
+    await request(app).post('/api/users').set(headers(adminA, a)).send({ ...account, roleCode: 'ADMIN' }).expect(422);
+    const created = await request(app).post('/api/platform/users').set('Authorization', `Bearer ${superToken}`).send(account).expect(201);
+    users.push(created.body.id);
+    expect(created.body.mustChangePassword).toBe(true);
+    expect(await db.societyMembership.count({ where: { userId: created.body.id } })).toBe(0);
+    const token = await login(account.email, true);
+    for (const societyId of [a, b]) {
+      const { body } = await request(app).get('/api/auth/me').set(headers(token, societyId)).expect(200);
+      expect(body).toMatchObject({ isSuperAdmin: false, roles: ['ADMIN'], societyId });
+      expect(body.societies.map((society: { id: string }) => society.id)).toEqual(expect.arrayContaining([a, b]));
+      await request(app).get('/api/finance/transactions').set(headers(token, societyId)).expect(200);
+    }
+    await request(app).get('/api/societies').set(headers(token, a)).expect(403);
+    await request(app).post('/api/societies').set(headers(token, a)).send({}).expect(403);
+    await request(app).put(`/api/societies/${b}`).set(headers(token, b)).send({}).expect(403);
+    await request(app).post('/api/platform/users').set(headers(token, a)).send(account).expect(403);
+    await request(app).post('/api/users').set(headers(token, a)).send({ ...account, roleCode: 'SOCIETY_ADMIN' }).expect(403);
   });
   it('keeps duplicate profile emails and member numbers separate by society', async () => {
     const first = await request(app).post('/api/members').set(headers(adminA, a)).send(profile).expect(201); memberA = first.body.id;
@@ -105,12 +126,13 @@ describe('multi-society isolation with MySQL', () => {
     await request(app).get('/api/members').set(headers(approver, b)).expect(403);
     await request(app).post('/api/members').set(headers(approver, a)).send(profile).expect(403);
     await request(app).get('/api/users').set(headers(approver, a)).expect(403);
-    expect((await request(app).get('/api/roles').set(headers(adminA, a)).expect(200)).body.some((r: { code: string }) => r.code === 'SUPER_ADMIN')).toBe(false);
+    const roles = (await request(app).get('/api/roles').set(headers(adminA, a)).expect(200)).body.map((role: { code: string }) => role.code);
+    expect(roles.sort()).toEqual(['ACCOUNTANT', 'APPROVER', 'MEMBER', 'SOCIETY_ADMIN']);
   });
   it('resolves permissions per society for the same identity without combining roles', async () => {
     const inA = await request(app).get('/api/auth/me').set(headers(dualToken, a)).expect(200);
     const inB = await request(app).get('/api/auth/me').set(headers(dualToken, b)).expect(200);
-    expect(inA.body.roles).toEqual(['ADMIN']); expect(inA.body.permissions).toContain('users.manage');
+    expect(inA.body.roles).toEqual(['SOCIETY_ADMIN']); expect(inA.body.permissions).toContain('users.manage');
     expect(inB.body.roles).toEqual(['MEMBER']); expect(inB.body.permissions).not.toContain('users.manage'); expect(inB.body.memberId).toBe(memberB);
     expect(inB.body.societies.map((s: { id: string }) => s.id)).toEqual(expect.arrayContaining([a, b]));
     await request(app).get('/api/users').set(headers(dualToken, a)).expect(200);
@@ -159,7 +181,7 @@ describe('multi-society isolation with MySQL', () => {
   it('lets only a super admin reset a global user password and revoke sessions in every society', async () => {
     const superHeaders = { Authorization: `Bearer ${superToken}` };
     const email = `${tag}-reset@example.test`;
-    const adminRole = await db.role.findUniqueOrThrow({ where: { code: 'ADMIN' } });
+    const adminRole = await db.role.findUniqueOrThrow({ where: { code: 'SOCIETY_ADMIN' } });
     const memberRole = await db.role.findUniqueOrThrow({ where: { code: 'MEMBER' } });
     const user = await db.user.create({ data: {
       name: 'Password Reset Test', email, passwordHash: await hashPassword(password), mustChangePassword: false,
@@ -178,7 +200,7 @@ describe('multi-society isolation with MySQL', () => {
 
     const directory = await request(app).get('/api/platform/users').set(superHeaders).query({ search: tag }).expect(200);
     expect(directory.body.items.filter((entry: { id: string }) => entry.id === user.id)).toEqual([
-      { id: user.id, email, name: user.name, isActive: true, roles: [{ role: { name: 'Admin' } }, { role: { name: 'Member' } }] },
+      { id: user.id, email, name: user.name, isActive: true, roles: [{ role: { name: 'Member' } }, { role: { name: 'Society Admin' } }] },
     ]);
     expect(directory.body.items.map((user: { email: string }) => user.email)).toEqual(expect.arrayContaining([
       `${tag}-super@example.test`, `${tag}-admin-a@example.test`, `${tag}-admin-b@example.test`,

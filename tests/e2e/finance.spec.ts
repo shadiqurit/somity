@@ -25,7 +25,7 @@ test.beforeAll(async () => {
   await db.$transaction(tx => syncRoles(tx));
   societyId = (await db.society.create({ data: { code: `FUI-${tag}`, name: `Finance Browser ${tag}` } })).id;
   const passwordHash = await hashPassword(password);
-  for (const code of ['ADMIN', 'ACCOUNTANT', 'APPROVER', 'MEMBER']) {
+  for (const code of ['SOCIETY_ADMIN', 'ACCOUNTANT', 'APPROVER', 'MEMBER']) {
     const role = await db.role.findUniqueOrThrow({ where: { code } }); emails[code] = `${tag}-${code.toLowerCase()}@finance-browser.test`;
     const user = await db.user.create({ data: { name: `Browser ${code}`, email: emails[code]!, passwordHash, mustChangePassword: false, memberships: { create: { societyId, roleId: role.id } } } }); userIds.push(user.id);
     if (code === 'MEMBER') memberId = (await db.member.create({ data: { societyId, memberNo: `FUI-${tag}`, userId: user.id, fullName: `Savings Member ${tag}`, phone: '01700000000', address: 'Dhaka', joinedAt: new Date('2026-01-01') } })).id;
@@ -50,7 +50,7 @@ test.afterAll(async () => {
 test('cash account, deposit request, approval, ledger and private member statement', async ({ page, browser }, testInfo) => {
   test.setTimeout(120000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  await signIn(page, 'ADMIN'); await page.getByRole('link', { name: 'Finance', exact: true }).click();
+  await signIn(page, 'SOCIETY_ADMIN'); await page.getByRole('link', { name: 'Finance', exact: true }).click();
   await page.getByRole('button', { name: 'Cash & bank accounts', exact: true }).click(); await page.getByRole('button', { name: 'Add account', exact: true }).click();
   const accountDialog = page.getByRole('dialog', { name: 'Add cash or bank account', exact: true });
   await accountDialog.getByLabel('Account code').fill('CASH-01'); await accountDialog.getByLabel('Account name').fill('Office cash'); await accountDialog.getByRole('button', { name: 'Create account', exact: true }).click();

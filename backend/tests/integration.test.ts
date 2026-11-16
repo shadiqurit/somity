@@ -36,12 +36,12 @@ beforeAll(async () => {
       await db.rolePermission.upsert({ where: { roleId_permissionId: { roleId: role.id, permissionId: permission.id } }, update: {}, create: { roleId: role.id, permissionId: permission.id } });
     }
   }
-  for (const roleCode of ['SUPER_ADMIN', 'ADMIN', 'APPROVER']) {
+  for (const roleCode of ['SUPER_ADMIN', 'SOCIETY_ADMIN', 'APPROVER']) {
     const role = await db.role.findUniqueOrThrow({ where: { code: roleCode } });
     const user = await db.user.create({ data: { name: `Test ${roleCode}`, email: `${tag}-${roleCode}@example.test`.toLowerCase(), passwordHash: await hashPassword(password), mustChangePassword: false, ...(roleCode === 'SUPER_ADMIN' ? { roles: { create: { roleId: role.id } } } : { memberships: { create: { societyId, roleId: role.id } } }) } });
     userIds.push(user.id);
     const result = await request(app).post('/api/auth/login').set('Origin', origin).send({ email: user.email, password }).expect(200);
-    if (roleCode === 'SUPER_ADMIN') superToken = result.body.accessToken; else if (roleCode === 'ADMIN') adminToken = result.body.accessToken; else approverToken = result.body.accessToken;
+    if (roleCode === 'SUPER_ADMIN') superToken = result.body.accessToken; else if (roleCode === 'SOCIETY_ADMIN') adminToken = result.body.accessToken; else approverToken = result.body.accessToken;
   }
 });
 afterAll(async () => {
@@ -200,7 +200,7 @@ describe('Phase 1 API with MySQL', () => {
     expect(await db.auditLog.count({ where: { entityId: memberId, action: 'MEMBER_ARCHIVED' } })).toBe(1);
   });
   it('revokes access on logout and exposes database health', async () => {
-    const login = await request(app).post('/api/auth/login').set('Origin', origin).send({ email: `${tag}-admin@example.test`, password }).expect(200);
+    const login = await request(app).post('/api/auth/login').set('Origin', origin).send({ email: `${tag}-society_admin@example.test`, password }).expect(200);
     await request(app).post('/api/auth/logout').set({ Origin: origin, Cookie: cookies(login) }).expect(204);
     await request(app).get('/api/auth/me').set(auth(login.body.accessToken)).expect(401);
     const health = await request(app).get('/api/health').expect(200);

@@ -4,7 +4,7 @@ import { db } from '../../config/database.js';
 import { hashPassword } from '../../utils/password.js';
 import { audit } from '../../services/audit.js';
 import { assertActiveSociety } from '../../services/tenant.js';
-import type { staffSchema } from './user.validator.js';
+import type { adminSchema, staffSchema } from './user.validator.js';
 
 export async function list(page: number, societyId: string) {
   const [memberships, total] = await db.$transaction([
@@ -40,6 +40,19 @@ export async function create(input: z.infer<typeof staffSchema>, actorId: string
     const role = await tx.role.findUniqueOrThrow({ where: { code: input.roleCode } });
     const created = await tx.user.create({ data: { name: input.name, email: input.email, passwordHash, memberships: { create: { societyId, roleId: role.id } } }, select: { id: true, name: true, email: true, mustChangePassword: true } });
     await audit(tx, actorId, 'STAFF_CREATED', 'user', created.id, { name: input.name, email: input.email, role: input.roleCode }, societyId);
+    return created;
+  });
+}
+
+export async function createAdmin(input: z.infer<typeof adminSchema>, actorId: string) {
+  const passwordHash = await hashPassword(input.password);
+  return db.$transaction(async tx => {
+    const role = await tx.role.findUniqueOrThrow({ where: { code: 'ADMIN' } });
+    const created = await tx.user.create({
+      data: { name: input.name, email: input.email, passwordHash, roles: { create: { roleId: role.id } } },
+      select: { id: true, name: true, email: true, mustChangePassword: true },
+    });
+    await audit(tx, actorId, 'ADMIN_CREATED', 'user', created.id, { name: input.name, email: input.email });
     return created;
   });
 }

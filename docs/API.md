@@ -23,7 +23,7 @@ All routes below require authentication, a changed initial password and an activ
 | GET `/finance/statements/:memberId` | finance.read | Approved movements, opening/closing/running balances; optional from/to/page/pageSize. Archived members' financial history remains available to staff. |
 | GET `/finance/statements/me` | profile.read | Identical statement restricted to the caller's linked member. Cannot select another member. |
 
-Submission keys are unique per society. Replaying the same normalized payload and requester returns its original transaction, including its current state; reusing a key for a different payload returns 409. Decision retries after completion return 409 without reposting. Insufficient member/cash funds return 409 and roll back the failed final decision. Another society's record/account returns 404, unauthorized operations 403, and malformed fields 422. There are no update/delete APIs for posted transactions or entries. The default policy requires a distinct authorized approver; Admin/Approver/Super Admin can decide, Accountant can submit, and only Admin/Super Admin manage accounts/policy.
+Submission keys are unique per society. Replaying the same normalized payload and requester returns its original transaction, including its current state; reusing a key for a different payload returns 409. Decision retries after completion return 409 without reposting. Insufficient member/cash funds return 409 and roll back the failed final decision. Another society's record/account returns 404, unauthorized operations 403, and malformed fields 422. There are no update/delete APIs for posted transactions or entries. The default policy requires a distinct authorized approver. Super Admin, Admin and Society Admin can submit transactions, decide requests and manage accounts and approval policy within their authorized society scope. Accountant can submit requests and Approver can decide them.
 
 ## Phase 1 endpoints
 
@@ -40,12 +40,13 @@ Errors use `{ "error": { "message": "...", "fields": { "field": ["reason"] } } }
 | GET /auth/me | Authenticated | Current user, roles, permissions, memberId and mustChangePassword. |
 | POST /auth/password | Authenticated + Origin | `{currentPassword,newPassword}`; invalidates all sessions, clears cookie, 204. |
 | GET /dashboard | dashboard.read | Actual member counts and 5 recently added members. No fabricated financial balances. |
-| GET /roles | users.manage | Available tenant role code/name pairs; platform SUPER_ADMIN is excluded. |
+| GET /roles | users.manage | Society role code/name pairs for `SOCIETY_ADMIN`, `ACCOUNTANT`, `APPROVER` and `MEMBER`. |
 | GET /societies?page=1&search=... | Platform Super Admin | Paginated society details, active status and member/user counts. |
-| POST /societies | Platform Super Admin | Society details plus `{admin:{name,email,password}}`; atomically creates the society and its first Admin; 201. |
+| POST /societies | Platform Super Admin | Society details plus `{admin:{name,email,password}}`. Creates the society and its first Society Admin atomically, 201. |
 | PUT /societies/:id | Platform Super Admin | Society details plus `{version,isActive}`; optimistic update; 200. |
+| POST /platform/users | Platform Super Admin | `{name,email,password}` creates an `ADMIN` with access to every active society, 201. No society selection is required. |
 | GET /users?page=1 | users.manage | Paginated identities, role names and status; 20 rows/page, no password hashes. |
-| POST /users | users.manage | `{name,email,password,roleCode}`; creates staff, 201. roleCode: ADMIN, ACCOUNTANT or APPROVER. Creates a membership in the selected society only. |
+| POST /users | users.manage | `{name,email,password,roleCode}` creates staff, 201. Accepts `SOCIETY_ADMIN`, `ACCOUNTANT` or `APPROVER` and creates a membership in the selected society. |
 | GET /members | members.read | Searchable/paginated non-archived members. |
 | POST /members | members.write | Member input below → persisted member, 201. |
 | GET /members/me | profile.read | Own linked profile. No arbitrary member ID. |

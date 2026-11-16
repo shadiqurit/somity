@@ -6,9 +6,9 @@ This increment implements member deposits and withdrawals, cash/bank accounts, o
 
 ## Workflow
 
-1. Admin opens **Finance → Cash & bank accounts → Add account** and creates the actual cash/bank accounts used by the society. Accounts start at zero. Bank metadata stores the bank name and optional last four digits only.
-2. Accountant or Admin opens **New transaction**, selects an active member and cash/bank account, and submits a deposit or withdrawal. A receipt/reference and note can be included. Amounts are BDT decimal strings with at most two decimal places. Future effective dates are rejected.
-3. Admin or Approver opens **Review** and approves or rejects. Default policy requires one approval and forbids deciding one's own request. Admin can select two distinct approvers and optionally permit self-approval. Each request captures its policy version and rules; changing the policy does not change pending requests. Set up another authorized approver before using the default policy with Admin-created requests.
+1. Super Admin, Admin or Society Admin opens **Finance → Cash & bank accounts → Add account** and creates the cash and bank accounts used by the selected society. Accounts start at zero. Bank metadata stores the bank name and optional last four digits only.
+2. An authorized administrator or accountant opens **New transaction**, selects an active member and cash or bank account, and submits a deposit or withdrawal. A receipt/reference and note can be included. Amounts are BDT decimal strings with at most two decimal places. Future effective dates are rejected.
+3. An authorized administrator or approver opens **Review** and approves or rejects. The default policy requires one approval and forbids deciding one's own request. An administrator can require two distinct approvers and optionally permit self-approval. Each request captures its policy version and rules at submission.
 4. Only final approval posts balanced ledger entries and changes balances. Rejection requires a reason. A requester can cancel a pending request. Failed posting rolls back its final approval too, allowing the request to be reviewed again after resolving the problem.
 5. Open the society ledger for posted debit/credit lines. Member profiles contain a date-filtered statement with opening/closing balances and running balances. Members see only their own statement through **My dashboard**.
 6. To correct an approved transaction, request a full reversal with a reason, approve it, then submit a replacement if required. The original entry remains unchanged. Reversals cannot themselves be reversed; simultaneous or duplicate active reversals are rejected. A rejected/cancelled reversal can be requested again.
@@ -33,7 +33,7 @@ Composite foreign keys scope every business relation to its society. Decisions, 
 
 | Role | Read ledger/accounts/statements | Submit/cancel own/request reversal | Approve/reject | Accounts/policy |
 | --- | --- | --- | --- | --- |
-| Super Admin / Admin | Yes | Yes | Yes | Yes |
+| Super Admin / Admin / Society Admin | Yes | Yes | Yes | Yes |
 | Accountant | Yes | Yes | No | No |
 | Approver | Yes | No | Yes | No |
 | Member | Own approved statement only | No | No | No |

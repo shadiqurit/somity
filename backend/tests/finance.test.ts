@@ -31,9 +31,12 @@ beforeAll(async () => {
     if (suffix === 'A') societyId = society.id; else otherSocietyId = society.id;
   }
   const passwordHash = await hashPassword(password);
-  for (const roleCode of ['ADMIN', 'ACCOUNTANT', 'APPROVER', 'MEMBER']) {
+  for (const roleCode of ['ADMIN', 'SOCIETY_ADMIN', 'ACCOUNTANT', 'APPROVER', 'MEMBER']) {
     const role = await db.role.findUniqueOrThrow({ where: { code: roleCode } });
-    const user = await db.user.create({ data: { name: `Finance ${roleCode}`, email: `${tag}-${roleCode.toLowerCase()}@finance.test`, passwordHash, mustChangePassword: false, memberships: { create: [{ societyId, roleId: role.id }, ...(roleCode === 'ADMIN' ? [{ societyId: otherSocietyId, roleId: role.id }] : [])] } } });
+    const user = await db.user.create({ data: {
+      name: `Finance ${roleCode}`, email: `${tag}-${roleCode.toLowerCase()}@finance.test`, passwordHash, mustChangePassword: false,
+      ...(roleCode === 'ADMIN' ? { roles: { create: { roleId: role.id } } } : { memberships: { create: { societyId, roleId: role.id } } }),
+    } });
     users.push(user.id); userIds[roleCode] = user.id;
     tokens[roleCode] = (await request(app).post('/api/auth/login').set('Origin', origin).send({ email: user.email, password }).expect(200)).body.accessToken;
   }
@@ -70,6 +73,17 @@ describe('Phase 2 financial workflow', () => {
     await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).send(input()).expect(422);
     for (const amount of ['0', '-1', '0.001', '1e3', 'abc', '1,000']) expect((await submit(input('DEPOSIT', amount))).status).toBe(422);
     expect((await submit(input('DEPOSIT', '1', '2099-01-01'))).status).toBe(422);
+  });
+  it('lets Admin submit transactions in another society while keeping Society Admin scoped', async () => {
+    const transaction = { type: 'OTHER_INCOME', amount: '10.50', cashAccountId: otherCashId, effectiveDate: '2026-11-09', note: 'Society B income' };
+    await request(app).post('/api/finance/transactions').set(headers('SOCIETY_ADMIN', otherSocietyId)).set('Idempotency-Key', randomUUID()).send(transaction).expect(403);
+    const created = await request(app).post('/api/finance/transactions').set(headers('ADMIN', otherSocietyId)).set('Idempotency-Key', randomUUID()).send(transaction).expect(201);
+    const path = `/api/finance/transactions/${created.body.id}`;
+    await request(app).get(path).set(headers('ADMIN')).expect(404);
+    await request(app).post(`${path}/decision`).set(headers('ADMIN', otherSocietyId)).send({ decision: 'APPROVE' }).expect(403);
+    await request(app).post(`${path}/cancel`).set(headers('ADMIN', otherSocietyId)).expect(200);
+    const local = await request(app).post('/api/finance/transactions').set(headers('SOCIETY_ADMIN')).set('Idempotency-Key', randomUUID()).send(input('DEPOSIT', '1')).expect(201);
+    await request(app).post(`/api/finance/transactions/${local.body.id}/cancel`).set(headers('SOCIETY_ADMIN')).expect(200);
   });
   it('keeps pending transactions out of balances and handles submission retries safely', async () => {
     const key = randomUUID(); const [first, retry] = await Promise.all([submit(input(), key), submit(input(), key)]);

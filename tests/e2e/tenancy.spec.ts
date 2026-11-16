@@ -12,6 +12,7 @@ if (!databaseUrl || !new URL(databaseUrl).pathname.endsWith('_test')) throw new 
 const url = new URL(databaseUrl);
 const db = new PrismaClient({ adapter: new PrismaMariaDb({ host: url.hostname, port: Number(url.port || 3306), user: decodeURIComponent(url.username), password: decodeURIComponent(url.password), database: url.pathname.slice(1), connectionLimit: 2 }) });
 const tag = randomUUID().slice(0, 8); const rootEmail = `society-root-${tag}@example.test`; const temp = 'SocietyTemporary123'; const password = 'SocietyPermanent123';
+const platformAdminEmail = `society-platform-admin-${tag}@example.test`;
 const societyIds: string[] = []; const userIds: string[] = []; let rootId = '';
 async function signIn(page: Page, email: string, first = false, temporaryPassword = temp) {
   await page.getByLabel('Email address', { exact: true }).fill(email);
@@ -29,7 +30,7 @@ test.beforeAll(async () => {
   rootId = (await db.user.create({ data: { name: 'Society Test Superadmin', email: rootEmail, passwordHash: await hashPassword(password), mustChangePassword: false, roles: { create: { roleId: role.id } } } })).id;
 });
 test.afterAll(async () => {
-  const generated = await db.user.findMany({ where: { email: { in: [rootEmail, `society-a-${tag}@example.test`, `society-b-${tag}@example.test`, `society-approver-${tag}@example.test`] } }, select: { id: true } });
+  const generated = await db.user.findMany({ where: { email: { in: [rootEmail, platformAdminEmail, `society-a-${tag}@example.test`, `society-b-${tag}@example.test`, `society-approver-${tag}@example.test`] } }, select: { id: true } });
   userIds.push(...generated.map(u => u.id), rootId);
   const societies = await db.society.findMany({ where: { code: { in: [`UI-A-${tag}`.toUpperCase(), `UI-B-${tag}`.toUpperCase()] } }, select: { id: true } }); societyIds.push(...societies.map(s => s.id));
   await db.auditLog.deleteMany({ where: { OR: [{ actorId: { in: userIds } }, { societyId: { in: societyIds } }] } });
@@ -41,7 +42,8 @@ test.afterAll(async () => {
   await db.society.deleteMany({ where: { id: { in: societyIds } } });
   await db.$disconnect();
 });
-test('creates separate societies and isolates admin and approver browser workspaces', async ({ page }, testInfo) => {
+test('switches societies for Admin and isolates Society Admin and Approver workspaces', async ({ page }, testInfo) => {
+  test.setTimeout(60000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/login'); await signIn(page, rootEmail);
   await page.getByRole('link', { name: 'Societies', exact: true }).click();
@@ -60,6 +62,13 @@ test('creates separate societies and isolates admin and approver browser workspa
   const adminBEmail = `society-b-${tag}@example.test`;
   const resetPassword = 'SocietyReset123';
   await page.getByRole('link', { name: 'Team & access', exact: true }).click();
+  await page.getByRole('button', { name: 'Add admin account', exact: true }).click();
+  const platformAdmin = page.getByRole('dialog', { name: 'Add admin account' });
+  await platformAdmin.getByLabel('Full name').fill('UI Cross-society Admin');
+  await platformAdmin.getByLabel('Login email').fill(platformAdminEmail);
+  await platformAdmin.getByLabel('Temporary password').fill(temp);
+  await platformAdmin.getByRole('button', { name: 'Create account', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Admin account created successfully.');
   await page.getByRole('searchbox', { name: 'Search user accounts' }).fill(adminBEmail);
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByRole('row').filter({ hasText: adminBEmail }).getByRole('button', { name: 'Set password' }).click();
@@ -88,12 +97,14 @@ test('creates separate societies and isolates admin and approver browser workspa
   await expect(page.getByLabel('Current society')).toHaveValue(societyA.id); await expect(page.getByLabel('Current society').locator('option')).toHaveCount(1);
   await expect(page.getByRole('link', { name: 'Societies', exact: true })).toHaveCount(0);
   await page.getByRole('link', { name: 'Team & access', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Add admin account', exact: true })).toHaveCount(0);
   await expect(page.getByRole('columnheader', { name: 'Status' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Set password' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Add staff account', exact: true }).click();
   const staff = page.getByRole('dialog', { name: 'Add staff account', exact: true });
-  await staff.getByLabel('Full name').fill('UI Society A Approver'); await staff.getByLabel('Login email').fill(`society-approver-${tag}@example.test`); await staff.getByLabel('Access role').selectOption('APPROVER'); await staff.getByLabel('Temporary password').fill(temp);
-  expect(await staff.getByLabel('Access role').locator('option').allTextContents()).not.toContain('Super Admin');
+  await staff.getByLabel('Full name').fill('UI Society A Approver'); await staff.getByLabel('Login email').fill(`society-approver-${tag}@example.test`); await staff.getByLabel('Temporary password').fill(temp);
+  await expect(staff.getByLabel('Access role').locator('option')).toHaveText(['Accountant', 'Approver', 'Society Admin']);
+  await staff.getByLabel('Access role').selectOption('APPROVER');
   await staff.getByRole('button', { name: 'Create account', exact: true }).click(); await expect(staff).not.toBeVisible();
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await signIn(page, `society-approver-${tag}@example.test`, true);
   await page.getByRole('link', { name: 'Members', exact: true }).click(); await expect(page.locator('tbody')).toContainText(`Isolated Member ${tag}`);
@@ -102,5 +113,15 @@ test('creates separate societies and isolates admin and approver browser workspa
   await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await signIn(page, adminBEmail, true, resetPassword);
   await expect(page.getByLabel('Current society')).toHaveValue(societyB.id);
   await page.getByRole('link', { name: 'Members', exact: true }).click(); await expect(page.getByRole('heading', { name: 'No members yet' })).toBeVisible();
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click(); await signIn(page, platformAdminEmail, true);
+  await expect(page.getByRole('link', { name: 'Societies', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Team & access', exact: true })).toHaveCount(0);
+  for (const society of [societyA, societyB]) {
+    await Promise.all([page.waitForEvent('load'), page.getByLabel('Current society').selectOption(society.id)]);
+    await expect(page.getByRole('heading', { name: 'Overview.' })).toBeVisible();
+    await expect(page.getByLabel('Current society')).toHaveValue(society.id);
+    await page.getByRole('link', { name: 'Finance', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'New transaction', exact: true })).toBeVisible();
+  }
   expect(errors).toEqual([]);
 });

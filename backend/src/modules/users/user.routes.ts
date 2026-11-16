@@ -9,4 +9,5 @@ userRouter.post('/', controller.create);
 export const platformUserRouter = Router();
 platformUserRouter.use(requireSuperAdmin);
 platformUserRouter.get('/', controller.listAll);
+platformUserRouter.post('/', controller.createAdmin);
 platformUserRouter.put('/:id/password', controller.setPassword);

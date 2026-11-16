@@ -1,8 +1,8 @@
-# Deploy somity.shadiqur.bd with Nginx on Windows
+# Deploy Somity with Nginx on Windows
 
-This configuration uses the existing Nginx installation at `C:\nginx` and the app checkout at `D:\app\somity`. Nginx serves the frontend and sends API requests to `127.0.0.1:3004`.
+The VPS serves `https://somity.shadiqur.bd/` from `frontend/dist/`. The [LAN setup](#windows-lan-at-192168559somity) serves `http://192.168.5.59/somity/` from `frontend/dist-lan/`. Each machine's Nginx sends API requests to its own `127.0.0.1:3004`. The commands use `C:\nginx` and `D:\app\somity` on each target machine.
 
-## Build Somity
+## Build Somity for the VPS
 
 Set these values in `D:\app\somity\backend\.env`. Keep the production `DATABASE_URL` and `JWT_ACCESS_SECRET` there as well. Create the uploads directory and give the account running the API permission to write to it. If moving an existing installation, copy its uploaded files there along with restoring its database. Leave `VITE_API_URL` unset or empty for the same-origin frontend build.
 
@@ -71,3 +71,42 @@ Invoke-RestMethod https://somity.shadiqur.bd/health
 ```
 
 All three should return `status: ok`. `/health` uses the same upstream handler as `/api/health`. Open `/login` in your browser and sign in. Select a society and refresh `/members` to confirm that Nginx serves Vue routes directly.
+
+## Windows LAN at 192.168.5.59/somity/
+
+On the LAN machine, use the same MySQL, PM2 and backend setup as above. Set these values in the LAN machine's `backend/.env`, alongside its database, signing secret and storage settings. The origin contains only the scheme and host because the browser sends it without the `/somity/` path.
+
+```dotenv
+NODE_ENV=production
+PORT=3004
+FRONTEND_ORIGIN=http://192.168.5.59
+TRUST_PROXY=1
+```
+
+Leave `VITE_API_URL` unset or empty. From the LAN machine's checkout, after installing dependencies and preparing its database, run the following commands.
+
+```powershell
+Set-Location D:\app\somity
+npm.cmd run build -w backend
+if ($LASTEXITCODE -ne 0) { throw 'Backend build failed.' }
+npm.cmd run build:lan -w frontend
+if ($LASTEXITCODE -ne 0) { throw 'LAN frontend build failed.' }
+pm2.cmd startOrRestart .\ecosystem.config.js
+if ($LASTEXITCODE -ne 0) { throw 'Backend startup failed.' }
+Invoke-RestMethod http://127.0.0.1:3004/api/health
+```
+
+Copy [`somity-lan.conf`](../deploy/windows/nginx/somity-lan.conf) to `C:\nginx\conf\somity-lan.conf`. If your checkout is in another directory, update both `alias` paths in the copied file. Replace the stock localhost `server` block, if present, with this include inside the existing `http { ... }` block. If the LAN machine already has a port 80 default server, merge the Somity locations into it or assign the default listener to one server block.
+
+```nginx
+include conf/somity-lan.conf;
+```
+
+Run `nginx.exe -t` and reload or start Nginx on the LAN machine using the commands above. Allow inbound TCP 80 from the trusted LAN. The LAN proxy rewrites the refresh cookie path to `/somity/api/auth` and removes `Secure` for LAN HTTP. HTTP sends credentials and session cookies without encryption, so keep this endpoint on a trusted LAN. [Nginx cookie directives](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_cookie_flags)
+
+```powershell
+Invoke-RestMethod http://192.168.5.59/somity/api/health
+Invoke-RestMethod http://192.168.5.59/somity/health
+```
+
+Both checks should return `status: ok`. Open `http://192.168.5.59/somity/` from another LAN device, sign in, switch societies, reload `/somity/members` and sign out. Check that browser requests stay under `/somity/` throughout.

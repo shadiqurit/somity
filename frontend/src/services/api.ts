@@ -1,5 +1,11 @@
 import axios from 'axios';
-export const api = axios.create({ baseURL: `${import.meta.env.VITE_API_URL ?? ''}/api`, withCredentials: true, timeout: 20000 });
+
+const apiOrigin = import.meta.env.VITE_API_URL?.replace(/\/+$/, '');
+export const api = axios.create({
+  baseURL: apiOrigin ? `${apiOrigin}/api` : `${import.meta.env.BASE_URL}api`,
+  withCredentials: true,
+  timeout: 20000,
+});
 let token: string | null = null;
 let societyId: string | null = sessionStorage.getItem('somity_society_id');
 let onRefreshed: (user: unknown) => void = () => {};

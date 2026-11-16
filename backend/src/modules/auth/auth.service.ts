@@ -14,22 +14,25 @@ export const userInclude = {
 } as const;
 type FullUser = NonNullable<Awaited<ReturnType<typeof findUser>>>;
 export function findUser(id: string) { return db.user.findUnique({ where: { id }, include: userInclude }); }
-export function isPlatformAdmin(user: FullUser) { return user.roles.some(r => r.role.code === 'SUPER_ADMIN'); }
+function platformRole(user: FullUser) {
+  return user.roles.find(({ role }) => role.code === 'SUPER_ADMIN')?.role
+    ?? user.roles.find(({ role }) => role.code === 'ADMIN')?.role;
+}
 function activeMemberships(user: FullUser) { return user.memberships.filter(m => m.isActive && m.society.isActive && !m.member?.archivedAt); }
-export function canSignIn(user: FullUser) { return user.isActive && (isPlatformAdmin(user) || activeMemberships(user).length > 0); }
+export function canSignIn(user: FullUser) { return user.isActive && (!!platformRole(user) || activeMemberships(user).length > 0); }
 export async function publicUser(user: FullUser, requestedSocietyId?: string) {
-  const isSuperAdmin = isPlatformAdmin(user);
+  const platform = platformRole(user);
   const memberships = activeMemberships(user);
-  const available = isSuperAdmin
+  const available = platform
     ? await db.society.findMany({ where: { isActive: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] })
     : memberships.map(m => m.society);
-  if (!isSuperAdmin && requestedSocietyId && !memberships.some(m => m.societyId === requestedSocietyId)) throw new AppError(403, 'You do not have access to this society');
+  if (!platform && requestedSocietyId && !memberships.some(m => m.societyId === requestedSocietyId)) throw new AppError(403, 'You do not have access to this society');
   const society = requestedSocietyId ? available.find(s => s.id === requestedSocietyId) ?? null : available[0] ?? null;
   const membership = memberships.find(m => m.societyId === society?.id);
-  const roles = isSuperAdmin ? user.roles.filter(r => r.role.code === 'SUPER_ADMIN').map(r => r.role) : membership ? [membership.role] : [];
+  const role = platform ?? membership?.role;
   return {
     id: user.id, email: user.email, name: user.name, mustChangePassword: user.mustChangePassword,
-    isSuperAdmin, roles: roles.map(r => r.code), permissions: [...new Set(roles.flatMap(r => r.permissions.map(p => p.permission.code)))],
+    isSuperAdmin: platform?.code === 'SUPER_ADMIN', roles: role ? [role.code] : [], permissions: role?.permissions.map(p => p.permission.code) ?? [],
     memberId: membership?.member?.id ?? null, societyId: society?.id ?? null,
     society: society ? { id: society.id, code: society.code, name: society.name } : null,
     societies: available.map(s => ({ id: s.id, code: s.code, name: s.name })),

@@ -18,7 +18,7 @@ export async function create(input: z.infer<typeof createSocietySchema>, actorId
   return db.$transaction(async tx => {
     const { admin, ...details } = input;
     const society = await tx.society.create({ data: details });
-    const role = await tx.role.findUniqueOrThrow({ where: { code: 'ADMIN' } });
+    const role = await tx.role.findUniqueOrThrow({ where: { code: 'SOCIETY_ADMIN' } });
     const user = await tx.user.create({ data: { name: admin.name, email: admin.email, passwordHash, memberships: { create: { societyId: society.id, roleId: role.id } } } });
     await audit(tx, actorId, 'SOCIETY_CREATED', 'society', society.id, { name: society.name, code: society.code, adminUserId: user.id }, society.id);
     return society;

@@ -5,18 +5,19 @@ The application now manages multiple societies in one MySQL database. Business r
 ## Administration workflow
 
 1. Sign in as the existing platform Super Admin and open **Societies**.
-2. Select **Add society**, enter its name/code/contact details and the first administrator's name, unique login email and temporary password.
+2. Select **Add society**, enter its name/code/contact details and the first Society Admin's name, unique login email and temporary password.
 3. Open that society from the list or choose it using **Current society** in the sidebar.
-4. Its Admin uses **Team & access** to create Admin, Accountant or Approver accounts. Member logins are created from member profiles. These accounts receive access to that society only.
-5. Every new login must change its temporary password. Members can view their own profile and approved savings statement. Approvers can read financial records and decide approval requests.
+4. Use **Team & access → Add admin account** as Super Admin to give a user financial access to every active society. Admins choose a society from **Current society** before working on its transactions.
+5. A Society Admin uses **Team & access** to create Society Admin, Accountant or Approver accounts within their society. Member logins are created from member profiles.
+6. Every new login must change its temporary password. Members can view their own profile and approved savings statement. Approvers can read financial records and decide approval requests.
 
-Only platform Super Admin can create/edit societies, enable/disable them or open societies without being a member. Ordinary society users cannot discover or select unrelated societies. Disabling a society blocks its business APIs and its users' access without deleting records. A Super Admin can reactivate it from the platform list.
+Only Super Admin can create, edit, enable or disable societies. Super Admin and Admin can open any active society. Society staff and members can select only societies with an active membership. Disabling a society blocks its business APIs while retaining its records. A Super Admin can reactivate it from the platform list.
 
 ## Data model
 
 - `societies` owns the society identity, unique code, name, contact details, currency/timezone, active flag and optimistic version.
 - `users` holds global login identities and salted password hashes. Login email is globally unique; a person does not get multiple passwords for the same identity.
-- `user_roles` is reserved for the platform `SUPER_ADMIN` role. Society roles never grant platform authority.
+- `user_roles` assigns platform `SUPER_ADMIN` and `ADMIN` roles. `ADMIN` includes finance permissions and the member and dashboard reads needed to work in a society. Member and staff management belongs to Super Admin and the assigned Society Admin.
 - `society_memberships` assigns one role and active flag to a user within a society. `(societyId,userId)` is unique. The structure supports one identity with different roles in multiple societies; permissions are resolved separately for each request and are never combined across societies.
 - `members` has society-scoped unique member numbers, emails and login links. Its optional login link references the membership's composite `(societyId,userId)` key. It cannot point to a user who lacks membership in that society.
 - `nominees` and `member_documents` reference `(societyId,memberId)` to the corresponding member's `(societyId,id)`. A mismatched society/member pairing fails at the database level, even outside the API.
@@ -44,9 +45,9 @@ The current provisioning forms create new login identities with unique emails. T
 
 Login/refresh and `/api/auth/me` return `isSuperAdmin`, `societyId`, the current `society`, available `societies`, current roles/permissions and the current society's memberId. An access token authenticates an identity/session; it does not grant access merely because a client supplies a society ID.
 
-Every business API request must include `X-Society-Id`. The backend validates the active society and membership before resolving permissions. Missing selection returns 400; a non-member's forged selection returns 403. A valid user in Society B requesting a Society A record receives 404 (or a permission denial for member-only roles). Super Admin business requests are also scoped to the selected society; the platform society list is a separate route.
+Every business API request must include `X-Society-Id`. The backend validates the active society and checks for a platform role or an active membership before resolving permissions. Missing selection returns 400 and an unauthorized society selection returns 403. A user operating in Society B who requests a Society A record receives 404 when the user has permission to read that type of record. The selected society scopes business requests for Admin and Super Admin too.
 
-All member list/detail/update/archive/login, staff list/create, dashboard, photo upload/remove/download queries use the validated society ID. Client payloads cannot assign society ownership. Staff provisioning accepts only ADMIN/ACCOUNTANT/APPROVER, and member login provisioning always assigns MEMBER. Tenant Admin cannot create a platform Super Admin.
+All member list/detail/update/archive/login, staff list/create, dashboard, photo upload/remove/download queries use the validated society ID. Client payloads cannot assign society ownership. Staff provisioning accepts `SOCIETY_ADMIN`, `ACCOUNTANT` and `APPROVER`. Member login provisioning assigns `MEMBER`. Super Admin provisions cross-society `ADMIN` accounts through `/api/platform/users`.
 
 Mutation transactions lock the active society for shared access and then the relevant member row/version. This prevents a society from being disabled mid-write, while preserving concurrent operations within it. Photo replacement/removal still queues disk cleanup atomically with metadata changes and audit history.
 
@@ -63,6 +64,8 @@ Migration `202611090004_multi_society` creates a first society with ID `legacy-s
 The local SQL and upload backup was saved under `.local/pre-tenancy/` before applying the migration. The migration was rehearsed against a temporary restored copy, including added legacy Admin/Member fixtures, then applied to the development and test databases. Use a maintenance window, a matching application release and a verified SQL/uploads backup for other installations. MySQL DDL is not a single rollbackable transaction; do not deploy old API code against the new schema. Rerunning the admin seed does not reset an existing password.
 
 The initial society can be renamed through **Societies → Edit**. Existing member profile URLs continue to work when that society is selected.
+
+Migration `202611160002_admin_scope` moves existing `ADMIN` memberships to `SOCIETY_ADMIN`, retaining their users, passwords and society assignments. Apply it with `npm run db:migrate` before deploying the updated API. New cross-society Admin accounts are created by Super Admin through **Team & access**.
 
 ## Verification and future financial tables
 

@@ -2,7 +2,7 @@
 
 Separate Vue 3 / Vite / TypeScript frontend and Express / TypeScript / MySQL 8 / Prisma backend, following `SPEC.md`. This phase delivers authentication, permissions, an admin dashboard, member CRUD with nominees/private photos, search/pagination, a read-only member dashboard, migrations and superadmin provisioning.
 
-Multiple societies are supported, each with its own Admin, Approver, Accountant and Members. Super Admin manages the platform; the sidebar society selector scopes all business screens and APIs. Existing records migrate into the first society without changing profile URLs. See [the multi-society guide](docs/MULTI_SOCIETY.md) for setup, isolation and migration details.
+Super Admin manages the platform and its societies. Admin can handle financial transactions in any active society. Society Admin manages members, staff and finance within the society assigned to their account. The sidebar society selector scopes business screens and APIs. See [the multi-society guide](docs/MULTI_SOCIETY.md) for setup, isolation and migration details.
 
 Phase 2 adds member deposits/withdrawals, cash and bank accounts, one- or two-person approvals, a balanced ledger, approved reversals, and private member statements. See [the Phase 2 guide](docs/PHASE2.md) for workflow, migration, permissions and tested guarantees. Loans with monthly principal installments and repayments, investments with principal/profit returns, society expenses and cash/bank transfers are now implemented; see [the financial modules guide](docs/FINANCIAL_MODULES.md). Automatic interest/profit allocation, PDF/Excel export and automated encrypted backups remain separate work. No financial records or balances are mocked.
 
@@ -82,9 +82,9 @@ The tests refuse a non-test schema. They create uniquely named fixtures and remo
 
 ## Deployment and later upgrades
 
-For `somity.shadiqur.bd`, use the [Windows Nginx deployment guide](docs/WINDOWS_NGINX_DEPLOYMENT.md). The [Windows deployment guide](docs/WINDOWS_DEPLOYMENT.md) covers Caddy.
+The [Windows Nginx deployment guide](docs/WINDOWS_NGINX_DEPLOYMENT.md) covers `somity.shadiqur.bd` and the Windows LAN site at `http://192.168.5.59/somity/`. Run `npm run build:lan -w frontend` to build the LAN frontend into `frontend/dist-lan`. The [Windows deployment guide](docs/WINDOWS_DEPLOYMENT.md) covers Caddy.
 
-Run `npm run build`, then `npm run start -w backend`. Serve `frontend/dist` with SPA history fallback and reverse-proxy `/api` to the API's loopback listener. Set NODE_ENV=production, a matching HTTPS FRONTEND_ORIGIN, a strong secret and persistent private STORAGE_DIR. Configure TRUST_PROXY only for the actual number of trusted reverse-proxy hops. Production refresh cookies require HTTPS. Do not use the Vite dev server for production.
+For the domain deployment, run `npm run build`, then `npm run start -w backend`. Serve `frontend/dist` with SPA history fallback and reverse-proxy `/api` to the API's loopback listener. Set NODE_ENV=production, a matching HTTPS FRONTEND_ORIGIN, a strong secret and persistent private STORAGE_DIR. Configure TRUST_PROXY only for the actual number of trusted reverse-proxy hops. Serve the domain over HTTPS so browsers can send production refresh cookies. Do not use the Vite dev server for production.
 
 Commit migrations and lockfile. Use `npm run db:dev -w backend -- --name descriptive_name` for new development schema changes, review generated SQL, and apply via `npm run db:migrate` in deployment. Prisma CLI/client/adapter are pinned to the same stable major/version. Do not run `db push` against production. Back up database **and uploaded files** before upgrades; automated/encrypted backups are outside Phase 1.
 

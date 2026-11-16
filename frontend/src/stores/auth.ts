@@ -9,7 +9,7 @@ export const useAuthStore = defineStore('auth', () => {
   const can = (permission: string) => !!user.value?.permissions.includes(permission);
   function applyUser(value: User) { user.value = value; setSocietyId(value.societyId); }
   function clear() { user.value = null; setToken(null); setSocietyId(null); }
-  setExpiredHandler(() => { clear(); window.location.assign('/login'); });
+  setExpiredHandler(() => { clear(); window.location.assign(`${import.meta.env.BASE_URL}login`); });
   setRefreshedHandler(value => applyUser(value as User));
   async function initialize() {
     if (initialized.value) return;
@@ -27,7 +27,7 @@ export const useAuthStore = defineStore('auth', () => {
     try { await refreshProfile(); }
     catch (error) { setSocietyId(previous); throw error; }
     // A fresh document removes profiles, list results and modal state from the old society.
-    window.location.assign(isStaff.value ? '/' : '/my-profile');
+    window.location.assign(`${import.meta.env.BASE_URL}${isStaff.value ? '' : 'my-profile'}`);
   }
   async function logout() { await api.post('/auth/logout'); clear(); }
   return { user, initialized, isStaff, can, initialize, login, logout, clear, refreshProfile, switchSociety };
