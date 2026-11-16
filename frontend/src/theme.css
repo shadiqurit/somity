@@ -1,0 +1,42 @@
+:root {
+  color-scheme: light dark;
+  --page-bg: light-dark(#f7f8fa, #101714);
+  --surface: light-dark(#fff, #18231e);
+  --surface-subtle: light-dark(#f6f8f5, #141e19);
+  --surface-hover: light-dark(#f0f5f1, #25342c);
+  --border: light-dark(#e4eae5, #33453b);
+  --control-border: light-dark(#a1b0a6, #647a6d);
+  --text: light-dark(#253c35, #e5efe9);
+  --text-secondary: light-dark(#405e4d, #c2d4c9);
+  --text-muted: light-dark(#5f7167, #a4baaf);
+  --placeholder: light-dark(#62766a, #a0b7aa);
+  --brand: light-dark(#163f36, #b6e3c9);
+  --accent: light-dark(#37684f, #9ad5b3);
+  --accent-subtle: light-dark(#eaf3ee, #253c30);
+  --accent-bg: light-dark(#eaf2e9, #1e3228);
+  --accent-border: light-dark(#cfdfcb, #3c5b49);
+  --primary: light-dark(#235b45, #8dceaa);
+  --primary-hover: light-dark(#174631, #a7e0bf);
+  --primary-text: light-dark(#fff, #12251b);
+  --focus: light-dark(#397957, #a5ddbb);
+  --focus-shadow: light-dark(#39795726, #a5ddbb33);
+  --warning-bg: light-dark(#faf4e8, #3d301e);
+  --warning-text: light-dark(#795a29, #edd096);
+  --danger-bg: light-dark(#fff2f0, #402826);
+  --danger-text: light-dark(#9b4138, #ffb4a8);
+  --danger-border: light-dark(#f0d9d2, #704740);
+  --success-bg: light-dark(#edf7eb, #203a2b);
+  --success-text: light-dark(#396445, #abe0b0);
+  --success-border: light-dark(#d9e9d1, #3c5a45);
+  --auth-bg: light-dark(#fafbf8, #101714);
+  --auth-story: light-dark(#163f36, #142b24);
+  --backdrop: light-dark(#142d245c, #0009);
+}
+
+:root[data-theme='light'] { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+
+.standalone-theme-toggle {
+  align-self: flex-end;
+  justify-self: end;
+}

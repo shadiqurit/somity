@@ -1,1 +1,22 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#163f36"><title>Somity · Society management</title></head><body><div id="app"></div><script type="module" src="/src/main.ts"></script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#163f36">
+    <meta name="color-scheme" content="light dark">
+    <script>
+      try {
+        const theme = localStorage.getItem('somity_theme');
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+      } catch {
+        // The browser's color scheme remains in effect when storage is unavailable.
+      }
+    </script>
+    <title>Somity · Society management</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
