@@ -24,7 +24,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function switchSociety(id: string) {
     const previous = user.value?.societyId ?? null;
     setSocietyId(id);
-    try { await refreshProfile(); }
+    try { applyUser((await api.post('/auth/select-society')).data); }
     catch (error) { setSocietyId(previous); throw error; }
     // A fresh document removes profiles, list results and modal state from the old society.
     window.location.assign(`${import.meta.env.BASE_URL}${isStaff.value ? '' : 'my-profile'}`);

@@ -15,7 +15,7 @@ async function main() {
     if (passwordHash) {
       const role = await tx.role.findUniqueOrThrow({ where: { code: 'SUPER_ADMIN' } });
       const user = await tx.user.create({ data: { email, name, passwordHash, mustChangePassword: true, roles: { create: { roleId: role.id } } } });
-      await tx.auditLog.create({ data: { actorId: user.id, action: 'SUPERADMIN_SEEDED', entityType: 'user', entityId: user.id } });
+      await tx.auditLog.create({ data: { actorId: user.id, actorRole: 'SUPER_ADMIN', action: 'SUPERADMIN_SEEDED', entityType: 'user', entityId: user.id } });
     }
     const society = await tx.society.upsert({ where: { code: 'DEFAULT' }, update: {}, create: { id: 'legacy-society', code: 'DEFAULT', name: 'Somity' } });
     await tx.systemSetting.upsert({ where: { societyId_key: { societyId: society.id, key: 'society' } }, update: {}, create: { societyId: society.id, key: 'society', value: { currency: 'BDT', timezone: 'Asia/Dhaka', locale: 'en-BD' } } });

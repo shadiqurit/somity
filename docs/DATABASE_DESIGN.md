@@ -50,6 +50,12 @@ Member list indexes cover archive/date/id, archive/status, name and phone. Numbe
 
 UTC instants use DATETIME(3); membership date is DATE. The UI formats dates for Asia/Dhaka. Concurrent member changes use compare-and-increment version updates. Upload and login creation also increment the member version, so a stale edit cannot silently overwrite a newer change. Keep the database user's migration credentials separate from restricted runtime credentials in production.
 
+### Transaction audit history
+
+Financial requests, approvals, rejections, postings, cancellations, reversal requests, and rejected-request deletions each append an `audit_logs` row in the same database transaction as the change. Each row records the society, actor, transaction ID, action, timestamp, and event details. Deletion sets `transactions.deletedAt` and retains the original transaction and its approval decisions.
+
+The transaction log uses a `(createdAt, id)` cursor, a bounded page size, and no total count. Composite audit indexes support a society’s chronological feed, a single transaction’s history, and filtering by action. The transaction list has complementary indexes on visible rows ordered by creation time, including variants for status and type filters.
+
 ## Later financial migrations
 
 Use member and user IDs as foreign keys. Do not add floating-point balance columns to members. Display balances computed from the approved ledger (or transactionally maintained, reconcilable aggregates).

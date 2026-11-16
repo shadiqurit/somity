@@ -84,7 +84,7 @@ test('switches societies for Admin and isolates Society Admin and Approver works
   await page.getByRole('link', { name: 'Overview', exact: true }).click();
   await page.getByRole('link', { name: '+ Add member', exact: true }).click();
   const member = page.getByRole('dialog', { name: 'Add member', exact: true });
-  await member.getByLabel('Full name', { exact: true }).fill(`Isolated Member ${tag}`); await member.getByLabel('Phone number').fill('+8801700000000'); await member.getByLabel('Address', { exact: true }).fill('Dhaka, Bangladesh');
+  await member.getByLabel('Full name', { exact: true }).fill(`Isolated Member ${tag}`); await member.getByLabel('Phone number').fill('+8801700000000'); await member.getByLabel('Present address', { exact: true }).fill('Dhaka, Bangladesh');
   await member.getByRole('button', { name: 'Add nominee', exact: true }).click(); const nominee = page.getByRole('dialog', { name: 'Add nominee', exact: true });
   await nominee.getByLabel('Nominee full name').fill('Isolated Nominee'); await nominee.getByLabel('Relationship').fill('Spouse'); await nominee.getByLabel('Nominee phone').fill('+8801800000000'); await nominee.getByLabel('Nominee address').fill('Dhaka');
   await nominee.getByRole('button', { name: 'Add to nominee list' }).click(); await member.getByRole('button', { name: 'Create member', exact: true }).click(); await expect(member).not.toBeVisible();

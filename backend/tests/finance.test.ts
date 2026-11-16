@@ -31,11 +31,11 @@ beforeAll(async () => {
     if (suffix === 'A') societyId = society.id; else otherSocietyId = society.id;
   }
   const passwordHash = await hashPassword(password);
-  for (const roleCode of ['ADMIN', 'SOCIETY_ADMIN', 'ACCOUNTANT', 'APPROVER', 'MEMBER']) {
+  for (const roleCode of ['SUPER_ADMIN', 'ADMIN', 'SOCIETY_ADMIN', 'ACCOUNTANT', 'APPROVER', 'MEMBER']) {
     const role = await db.role.findUniqueOrThrow({ where: { code: roleCode } });
     const user = await db.user.create({ data: {
       name: `Finance ${roleCode}`, email: `${tag}-${roleCode.toLowerCase()}@finance.test`, passwordHash, mustChangePassword: false,
-      ...(roleCode === 'ADMIN' ? { roles: { create: { roleId: role.id } } } : { memberships: { create: { societyId, roleId: role.id } } }),
+      ...(['SUPER_ADMIN', 'ADMIN'].includes(roleCode) ? { roles: { create: { roleId: role.id } } } : { memberships: { create: { societyId, roleId: role.id } } }),
     } });
     users.push(user.id); userIds[roleCode] = user.id;
     tokens[roleCode] = (await request(app).post('/api/auth/login').set('Origin', origin).send({ email: user.email, password }).expect(200)).body.accessToken;
@@ -57,6 +57,7 @@ afterAll(async () => {
   await db.ledgerAccount.deleteMany({ where: scoped });
   await db.financePolicy.deleteMany({ where: scoped });
   await db.auditLog.deleteMany({ where: { OR: [scoped, { actorId: { in: users } }] } });
+  await db.nominee.deleteMany({ where: scoped });
   await db.member.deleteMany({ where: scoped });
   await db.user.deleteMany({ where: { id: { in: users } } });
   await db.society.deleteMany({ where: { id: { in: societies } } });
@@ -299,5 +300,142 @@ describe('Phase 2 financial workflow', () => {
     const otherTenant = await request(app).get('/api/finance/income-summary').set(headers('ADMIN', otherSocietyId)).expect(200);
     expect(otherTenant.body.total).toBe('0.00');
     await request(app).get('/api/finance/income-summary').set(headers('MEMBER')).expect(403);
+  });
+
+  it('closes membership after posted settlement and prevents new activity on the closed account', async () => {
+    const admin = headers('SOCIETY_ADMIN');
+    const profile = {
+      fullName: 'Settling Member', phone: '01700000000', address: 'Dhaka', joinedAt: '2026-01-01',
+      nominees: [{ fullName: 'Test Nominee', relationship: 'Sibling', phone: '01800000000', address: 'Dhaka', sharePercent: '100' }],
+    };
+    await request(app).post('/api/members').set(admin).send({ ...profile, status: 'CLOSED' }).expect(422);
+    const created = await request(app).post('/api/members').set(admin).send(profile).expect(201);
+    const path = `/api/members/${created.body.id}`;
+    const close = () => request(app).put(path).set(admin).send({ ...profile, status: 'CLOSED', version: created.body.version });
+    const cash = await request(app).post('/api/finance/accounts').set(admin).send({ code: 'SETTLEMENT-CASH', name: 'Settlement cash', kind: 'CASH' }).expect(201);
+    const send = (data: Record<string, unknown>) => request(app).post('/api/finance/transactions')
+      .set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+      .send({ cashAccountId: cash.body.id, effectiveDate: '2026-11-09', ...data });
+    const deposit = () => send({ type: 'DEPOSIT', memberId: created.body.id, amount: '100' });
+
+    const pending = await deposit().expect(201);
+    expect((await close().expect(409)).body.error.message).toContain('pending member transactions');
+    expect((await approve(pending.body.id)).status).toBe(200);
+    expect((await close().expect(409)).body.error.message).toContain('savings balance (100.00 BDT)');
+    await request(app).delete(path).set(admin).send({ version: created.body.version }).expect(409);
+
+    const loan = await send({ type: 'LOAN_DISBURSEMENT', memberId: created.body.id, amount: '40', installmentCount: 1, firstDueDate: '2026-11-09' }).expect(201);
+    const postedLoan = await approve(loan.body.id);
+    expect(postedLoan.status).toBe(200);
+    const loanId = postedLoan.body.loanId;
+    const post = async (data: Record<string, unknown>) => {
+      const pending = await send(data).expect(201);
+      const posted = await approve(pending.body.id);
+      expect(posted.status).toBe(200);
+      return posted.body.id as string;
+    };
+    await post({ type: 'LOAN_REPAYMENT', loanId, amount: '39.99' });
+    await post({ type: 'WITHDRAWAL', memberId: created.body.id, amount: '99.99' });
+    const blocked = await close().expect(409);
+    expect(blocked.body.error.message).toContain('loan balance (0.01 BDT)');
+    expect(blocked.body.error.message).toContain('savings balance (0.01 BDT)');
+
+    const finalRepayment = await post({ type: 'LOAN_REPAYMENT', loanId, amount: '0.01' });
+    await post({ type: 'WITHDRAWAL', memberId: created.body.id, amount: '0.01' });
+    const closed = await close().expect(200);
+    expect(closed.body.status).toBe('CLOSED');
+    await request(app).put(path).set(admin).send({ ...profile, status: 'ACTIVE', version: closed.body.version }).expect(409);
+    await request(app).post(`${path}/login`).set(admin).send({ email: `${tag}-closed@finance.test`, password }).expect(409);
+    await deposit().expect(404);
+    await send({ type: 'LOAN_REPAYMENT', loanId, amount: '1' }).expect(409);
+    await request(app).post(`/api/finance/transactions/${finalRepayment}/reversal`).set(headers('ACCOUNTANT'))
+      .set('Idempotency-Key', randomUUID()).send({ effectiveDate: '2026-11-09', note: 'Reopen loan balance' }).expect(409);
+    const statement = await request(app).get(`/api/finance/statements/${created.body.id}`).set(admin).expect(200);
+    expect(statement.body.closingBalance).toBe('0.00');
+    expect(statement.body.total).toBe(3);
+    expect(await db.auditLog.count({ where: { societyId, entityId: created.body.id, action: 'MEMBER_CLOSED' } })).toBe(1);
+  });
+
+  it('limits rejected transaction deletion to admins and retains the complete audit history', async () => {
+    const actor = headers('SOCIETY_ADMIN');
+    const before = await balance();
+    const body = input('DEPOSIT', '11.25');
+    const key = randomUUID();
+    const submitted = await submit(body, key);
+    expect(submitted.status).toBe(201);
+    const pending = submitted.body;
+    const path = `/api/finance/transactions/${pending.id}`;
+    await request(app).delete(path).set(actor).expect(409);
+    await request(app).post(`${path}/decision`).set(headers('APPROVER')).send({ decision: 'REJECT', comment: 'Incorrect payment reference' }).expect(200);
+    for (const role of ['ACCOUNTANT', 'APPROVER', 'MEMBER']) await request(app).delete(path).set(headers(role)).expect(403);
+    await request(app).delete(path).set(headers('ADMIN', otherSocietyId)).expect(404);
+    await Promise.all([request(app).delete(path).set(actor).expect(204), request(app).delete(path).set(actor).expect(204)]);
+    await request(app).get(path).set(actor).expect(404);
+    expect((await submit(body, key)).status).toBe(409);
+    const rejected = await request(app).get('/api/finance/transactions').set(actor).query({ status: 'REJECTED', pageSize: 100 }).expect(200);
+    expect(rejected.body.items.map((row: { id: string }) => row.id)).not.toContain(pending.id);
+    expect(await db.approvalDecision.count({ where: { societyId, transactionId: pending.id } })).toBe(1);
+    expect(await balance()).toBe(before);
+    await request(app).delete(`/api/finance/transactions/${depositId}`).set(actor).expect(409);
+
+    const log = (params: Record<string, string | number> = {}, scope = actor) => request(app).get('/api/finance/transaction-log')
+      .set(scope).query({ transactionNo: pending.transactionNo, ...params });
+    const first = await log({ limit: 1 }).expect(200);
+    expect(first.body.items).toMatchObject([{ action: 'FINANCE_DELETED', actor: { id: userIds.SOCIETY_ADMIN }, transaction: { transactionNo: pending.transactionNo, amount: '11.25', deletedAt: expect.any(String) } }]);
+    const rest = await log({ after: first.body.nextCursor }).expect(200);
+    expect(rest.body.items).toMatchObject([{ action: 'FINANCE_REJECTED', changes: { comment: 'Incorrect payment reference' } }, { action: 'FINANCE_REQUESTED' }]);
+    expect(rest.body.nextCursor).toBeNull();
+    expect((await log({ action: 'FINANCE_DELETED' }).expect(200)).body.items).toHaveLength(1);
+    expect((await log({}, headers('ADMIN', otherSocietyId)).expect(200)).body.items).toEqual([]);
+    await request(app).get('/api/finance/transaction-log').set(headers('ADMIN', otherSocietyId)).query({ after: first.body.nextCursor }).expect(422);
+    await log({}, headers('MEMBER')).expect(403);
+
+    for (const role of ['ADMIN', 'SUPER_ADMIN']) {
+      const row = await submit(body);
+      expect(row.status).toBe(201);
+      const url = `/api/finance/transactions/${row.body.id}`;
+      await request(app).post(`${url}/decision`).set(headers('APPROVER')).send({ decision: 'REJECT', comment: 'Duplicate request' }).expect(200);
+      await request(app).delete(url).set(headers(role)).expect(204);
+    }
+  });
+
+  it('shows member and staff actions with the recorded role and enforces activity visibility', async () => {
+    const member = headers('MEMBER');
+    const approver = headers('APPROVER');
+    const admin = headers('SOCIETY_ADMIN');
+    await request(app).get('/api/members/me').set(member).expect(200);
+    await request(app).get('/api/finance/statements/me').set(member).expect(200);
+    await request(app).post('/api/auth/select-society').set(admin).expect(200);
+
+    const personal = await request(app).get('/api/activity/me').set(member).expect(200);
+    expect(personal.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'AUTH_LOGIN', actorRole: 'MEMBER' }),
+      expect.objectContaining({ action: 'MEMBER_PROFILE_VIEWED', actorRole: 'MEMBER', entityId: memberId }),
+      expect.objectContaining({ action: 'FINANCE_STATEMENT_VIEWED', actorRole: 'MEMBER' }),
+    ]));
+    expect(personal.body.items.every((item: { actor: { id: string } }) => item.actor.id === userIds.MEMBER)).toBe(true);
+    expect(personal.body.items[0]).not.toHaveProperty('changes');
+    await request(app).get('/api/activity').set(member).expect(403);
+    await request(app).get('/api/activity').set(approver).expect(403);
+    await request(app).get('/api/activity/platform').set(admin).expect(403);
+
+    const decisions = await request(app).get('/api/activity').set(admin)
+      .query({ actorRole: 'APPROVER', action: 'FINANCE_APPROVED', limit: 1 }).expect(200);
+    expect(decisions.body.items).toMatchObject([{ action: 'FINANCE_APPROVED', actorRole: 'APPROVER', actor: { id: userIds.APPROVER }, targetLabel: expect.stringMatching(/^TX-/) }]);
+    const older = await request(app).get('/api/activity').set(admin)
+      .query({ actorRole: 'APPROVER', action: 'FINANCE_APPROVED', after: decisions.body.nextCursor }).expect(200);
+    expect(older.body.items.map((item: { id: string }) => item.id)).not.toContain(decisions.body.items[0].id);
+    await request(app).get('/api/activity/me').set(member).query({ after: decisions.body.nextCursor }).expect(422);
+    const other = await request(app).get('/api/activity').set(headers('ADMIN', otherSocietyId)).query({ action: 'MEMBER_PROFILE_VIEWED' }).expect(200);
+    expect(other.body.items).toEqual([]);
+
+    const session = await request(app).post('/api/auth/login').set('Origin', origin)
+      .send({ email: `${tag}-member@finance.test`, password }).expect(200);
+    const cookie = (session.headers['set-cookie'] as unknown as string[])[0]!.split(';')[0]!;
+    await request(app).post('/api/auth/logout').set('Origin', origin).set('Cookie', cookie).expect(204);
+    const platform = await request(app).get('/api/activity/platform').set(headers('SUPER_ADMIN')).query({ action: 'AUTH_LOGOUT' }).expect(200);
+    expect(platform.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: 'AUTH_LOGOUT', actorRole: 'MEMBER', actor: { id: userIds.MEMBER, name: 'Finance MEMBER' }, society: expect.objectContaining({ id: societyId }) }),
+    ]));
   });
 });

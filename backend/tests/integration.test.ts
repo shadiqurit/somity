@@ -106,6 +106,7 @@ describe('Phase 1 API with MySQL', () => {
   it('protects photos, checks actual file bytes and handles upload limits', async () => {
     const photo = await sharp({ create: { width: 12, height: 12, channels: 3, background: '#235b45' } }).png().toBuffer();
     const result = await request(app).post(`/api/members/${memberId}/photo`).set(auth(adminToken)).attach('photo', photo, { filename: 'photo.png', contentType: 'image/png' }).expect(201); photoId = result.body.id;
+    expect(await db.auditLog.findMany({ where: { entityId: memberId, action: 'MEMBER_PHOTO_UPLOADED' }, select: { actorRole: true } })).toEqual([{ actorRole: 'SOCIETY_ADMIN' }]);
     await request(app).get(`/api/documents/${photoId}`).set(auth(memberToken)).expect('Content-Type', /image\/jpeg/).expect(200);
     const otherPhoto = await request(app).post(`/api/members/${secondMemberId}/photo`).set(auth(adminToken)).attach('photo', photo, { filename: 'other.png', contentType: 'image/png' }).expect(201);
     await request(app).get(`/api/documents/${otherPhoto.body.id}`).set(auth(memberToken)).expect(403);
@@ -159,7 +160,7 @@ describe('Phase 1 API with MySQL', () => {
     const member = await request(app).get(`/api/members/${memberId}`).set(auth(adminToken)).expect(200); expect(member.body.documents).toEqual([]);
     await request(app).get(`/api/documents/${photoId}`).set(auth(memberToken)).expect(404);
     await request(app).delete(`/api/members/${memberId}/photo`).set(auth(adminToken)).send({ documentId: photoId }).expect(204);
-    expect(await db.auditLog.count({ where: { entityId: memberId, action: 'MEMBER_PHOTO_REMOVED' } })).toBe(1);
+    expect(await db.auditLog.findMany({ where: { entityId: memberId, action: 'MEMBER_PHOTO_REMOVED' }, select: { actorRole: true } })).toEqual([{ actorRole: 'SOCIETY_ADMIN' }]);
   });
   it('retains failed file deletions for retry and treats already-missing bytes as cleaned', async () => {
     const storageKey = `${tag}-retry.jpg`;

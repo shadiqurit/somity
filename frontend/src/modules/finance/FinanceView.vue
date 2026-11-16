@@ -6,6 +6,7 @@ import { useAuthStore } from '../../stores/auth';
 import { useLocale } from '../../composables/useLocale';
 import { date } from '../../utils/format';
 import ProductReports from './ProductReports.vue';
+import TransactionLog from './TransactionLog.vue';
 import { bdt, todayDhaka, type Account, type FinancialTransaction, type FinanceSummary, type IncomeSummary, type LedgerLine, type Policy } from './types';
 import AppButton from '../../components/ui/AppButton.vue';
 import AppInput from '../../components/ui/AppInput.vue';
@@ -49,12 +50,13 @@ const historyTypeOptions = computed(() => [
 const productOptions = ref<{label:string;value:string}[]>([]);
 let entryPreset: EntryPreset | undefined;
 const auth = useAuthStore(); const error = ref(''); const notice = ref(''); const loading = ref(false); const busy = ref(false); const actionError = ref('');
-type FinanceTab = Exclude<Section, 'finance' | 'approvals'> | 'transactions' | 'ledger' | 'accounts';
+type FinanceTab = Exclude<Section, 'finance' | 'approvals'> | 'transactions' | 'ledger' | 'accounts' | 'log';
 const tab = ref<FinanceTab>(!props.section || props.section === 'finance' || props.section === 'approvals' ? 'transactions' : props.section);
 const summary = ref<FinanceSummary>(); const accounts = ref<Account[]>([]); const policy = ref<Policy>();
 const rows = ref<FinancialTransaction[]>([]); const ledgerRows = ref<LedgerLine[]>([]); const page = ref(1); const pages = ref(1); const total = ref(0);
 const status = ref(props.section === 'approvals' ? 'PENDING' : ''); const type = ref(''); const from = ref(''); const to = ref('');
 const entryOpen = ref(false); const accountOpen = ref(false); const policyOpen = ref(false); const selected = ref<FinancialTransaction>(); const detailLoading = ref(false);
+const deleteOpen = ref(false); const deleteError = ref('');
 const decision = ref('APPROVE'); const comment = ref(''); const reverseOpen = ref(false); const reversalNote = ref(''); const reversalDate = ref(todayDhaka());
 const blankForm = () => ({ type: '', memberId: '', cashAccountId: '', amount: '', effectiveDate: todayDhaka(), reference: '', note: '', loanId: '', investmentId: '', installmentCount: '12', firstDueDate: todayDhaka(), title: '', counterparty: '', principalReturned: '0.00', profit: '0.00', category: '', payee: '', destinationAccountId: '' });
 const form = reactive(blankForm());
@@ -94,7 +96,7 @@ async function load(value = 1) {
     pages.value = records.data.pages; total.value = records.data.total;
   } catch (e) { if (sequence === loadSequence) error.value = errorMessage(e); } finally { if (sequence === loadSequence) loading.value = false; }
 }
-watch(tab, () => load());
+watch(tab, current => { if (current !== 'log') void load(); });
 let memberRequest: AbortController | undefined;
 async function searchMembers() {
   memberRequest?.abort();
@@ -187,6 +189,19 @@ async function cancel() {
   try { selected.value = (await api.post(`/finance/transactions/${selected.value.id}/cancel`)).data; notice.value = 'Pending request cancelled.'; await load(page.value); }
   catch (e) { actionError.value = errorMessage(e); } finally { busy.value = false; }
 }
+async function deleteRejected() {
+  if (!selected.value) return;
+  busy.value = true;
+  deleteError.value = '';
+  try {
+    await api.delete(`/finance/transactions/${selected.value.id}`);
+    deleteOpen.value = false;
+    selected.value = undefined;
+    notice.value = 'Rejected transaction deleted. Its history is available in the transaction log.';
+    await load();
+  } catch (e) { deleteError.value = errorMessage(e); }
+  finally { busy.value = false; }
+}
 async function reverse() {
   if (!selected.value) return;
   const body = { effectiveDate: reversalDate.value, note: reversalNote.value };
@@ -244,20 +259,22 @@ onMounted(() => load());
     <SummaryCard :label="t('Investment profit')" :value="bdt(incomeSummary.investmentProfit)" detail="Net approved investment profit"><ArrowDownUp :size="20" /></SummaryCard>
   </section>
   <section v-if="summary" class="summary-grid finance-summary" aria-label="Financial summary"><SummaryCard label="Member savings" :value="bdt(summary.memberSavings)" detail="Approved balance at end date"><Wallet :size="20" /></SummaryCard><SummaryCard label="Savings in" :value="bdt(summary.deposits)" detail="Period increases, including reversals"><ArrowDownUp :size="20" /></SummaryCard><SummaryCard label="Savings out" :value="bdt(summary.withdrawals)" detail="Period decreases, including reversals"><Landmark :size="20" /></SummaryCard><SummaryCard label="Awaiting approval" :value="summary.pending" detail="All pending requests"><ClipboardCheck :size="20" /></SummaryCard></section>
-  <section v-if="['transactions','ledger','accounts','income','expenses'].includes(tab)" class="panel directory">
+  <section v-if="['transactions','ledger','accounts','income','expenses','log'].includes(tab)" class="panel directory">
     <div v-if="section === 'finance'" class="finance-tabs" aria-label="Finance sections">
       <AppButton :variant="tab === 'transactions' ? 'primary' : 'ghost'" @click="tab = 'transactions'">Transactions</AppButton>
       <AppButton :variant="tab === 'ledger' ? 'primary' : 'ghost'" @click="tab = 'ledger'">Society ledger</AppButton>
       <AppButton :variant="tab === 'accounts' ? 'primary' : 'ghost'" @click="tab = 'accounts'">Cash &amp; bank accounts</AppButton>
+      <AppButton :variant="tab === 'log' ? 'primary' : 'ghost'" @click="tab = 'log'">Transaction log</AppButton>
     </div>
-    <form v-if="tab !== 'accounts'" class="finance-filters" @submit.prevent="load()">
+    <form v-if="tab !== 'accounts' && tab !== 'log'" class="finance-filters" @submit.prevent="load()">
       <AppInput v-model="from" label="From date" type="date" />
       <AppInput v-model="to" label="To date" type="date" />
       <AppSelect v-if="tab === 'transactions'" v-model="status" label="Status" :options="[{label:'All statuses',value:''}, ...['PENDING','POSTED','REJECTED','CANCELLED'].map(value => ({label:value,value}))]" />
       <AppSelect v-if="tab === 'transactions'" v-model="type" label="Type" :options="historyTypeOptions" />
       <AppButton type="submit" variant="secondary" :loading="loading">Apply filters</AppButton>
     </form>
-    <AppTable v-if="['transactions', 'income', 'expenses'].includes(tab)" :rows="rows" :columns="tab === 'income' ? incomeColumns : columns" :page="page" :pages="pages" :total="total" :loading="loading" @page="load">
+    <TransactionLog v-if="tab === 'log'" :key="reportRevision" />
+    <AppTable v-else-if="['transactions', 'income', 'expenses'].includes(tab)" :rows="rows" :columns="tab === 'income' ? incomeColumns : columns" :page="page" :pages="pages" :total="total" :loading="loading" @page="load">
       <template #cell-transactionNo="{ row }">
         <strong>{{ row.transactionNo }}</strong>
         <small class="finance-cell-note">{{ transactionLabel(row) }} · {{ row.cashAccount.name }}</small>
@@ -334,7 +351,15 @@ onMounted(() => load());
     <dl v-if="selected.details" class="finance-details"><div v-for="(value,key) in selected.details" :key="key"><dt>{{ detailLabel(String(key)) }}</dt><dd>{{ detailValue(String(key),value) }}</dd></div></dl><h3>Approval history</h3><p v-if="!selected.decisions.length" class="muted">No decisions yet.</p><ol class="finance-decisions"><li v-for="d in selected.decisions" :key="d.id"><strong>{{ d.step }}. {{ d.approver.name }} · {{ d.decision }}</strong><p>{{ date(d.createdAt) }} {{ d.comment ? `· ${d.comment}` : '' }}</p></li></ol>
     <AppTable v-if="selected.entries?.length" :rows="selected.entries" :columns="[{key:'account',label:'Account'},{key:'debit',label:'Debit'},{key:'credit',label:'Credit'}]"><template #cell-account="{ row }">{{ row.account.name }}</template><template #cell-debit="{ row }">{{ bdt(row.debit) }}</template><template #cell-credit="{ row }">{{ bdt(row.credit) }}</template></AppTable>
     <AppForm v-if="canDecide" :busy="busy" @submit="decide"><h3>Review request</h3><AppSelect v-model="decision" label="Decision" :options="[{label:'Approve',value:'APPROVE'},{label:'Reject',value:'REJECT'}]" /><AppInput v-model="comment" :label="decision === 'REJECT' ? 'Reason for rejection' : 'Comment (optional)'" :required="decision === 'REJECT'" :minlength="decision === 'REJECT' ? 5 : undefined" maxlength="500" /><AppButton type="submit" :variant="decision === 'REJECT' ? 'danger' : 'primary'" :loading="busy">{{ decision === 'REJECT' ? 'Reject request' : 'Approve request' }}</AppButton></AppForm>
-    <div class="button-row finance-detail-actions"><AppButton v-if="selected.status === 'PENDING' && selected.createdById === auth.user?.id && auth.can('finance.write')" variant="secondary" :loading="busy" @click="cancel">Cancel pending request</AppButton><AppButton v-if="selected.status === 'POSTED' && selected.type !== 'REVERSAL' && !selected.reversals.length && auth.can('finance.write') && !reverseOpen" variant="secondary" @click="beginReversal">Request reversal</AppButton><span v-if="selected.reversals.length" class="muted">A reversal is already {{ selected.reversals[0]?.status.toLowerCase() }}.</span></div>
+    <div class="button-row finance-detail-actions"><AppButton v-if="selected.status === 'PENDING' && selected.createdById === auth.user?.id && auth.can('finance.write')" variant="secondary" :loading="busy" @click="cancel">Cancel pending request</AppButton><AppButton v-if="selected.status === 'POSTED' && selected.type !== 'REVERSAL' && !selected.reversals.length && auth.can('finance.write') && !reverseOpen" variant="secondary" @click="beginReversal">Request reversal</AppButton><AppButton v-if="selected.status === 'REJECTED' && auth.can('finance.delete')" variant="danger" @click="deleteError = ''; deleteOpen = true">Delete rejected transaction</AppButton><span v-if="selected.reversals.length" class="muted">A reversal is already {{ selected.reversals[0]?.status.toLowerCase() }}.</span></div>
     <AppForm v-if="reverseOpen" :busy="busy" @submit="reverse"><h3>Reverse this transaction</h3><p class="muted">The original entry stays unchanged. An approved reversal posts equal and opposite entries.</p><AppInput v-model="reversalDate" label="Reversal date" type="date" :min="selected.effectiveDate.slice(0,10)" :max="todayDhaka()" required /><AppInput v-model="reversalNote" label="Reason for reversal" minlength="5" maxlength="500" required /><div class="form-actions"><AppButton variant="secondary" @click="reverseOpen = false">Cancel</AppButton><AppButton type="submit" :loading="busy">Submit reversal request</AppButton></div></AppForm>
   </template></AppModal>
+  <AppModal :open="deleteOpen" title="Delete rejected transaction?" :busy="busy" @close="deleteOpen = false">
+    <p class="muted">{{ selected?.transactionNo }} will be removed from the transaction list. Its history will remain in the transaction log.</p>
+    <p v-if="deleteError" class="alert error" role="alert">{{ deleteError }}</p>
+    <div class="form-actions">
+      <AppButton variant="secondary" :disabled="busy" @click="deleteOpen = false">Cancel</AppButton>
+      <AppButton variant="danger" :loading="busy" @click="deleteRejected">Delete transaction</AppButton>
+    </div>
+  </AppModal>
 </template>

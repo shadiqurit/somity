@@ -142,8 +142,58 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await expect(incomeDetails.getByRole('heading', { name: '৳ 10.00', exact: true })).toBeVisible();
   await expect(incomeDetails.getByRole('definition').filter({ hasText: '৳ 60.00' })).toBeVisible();
   await incomeDetails.getByRole('button', { name: 'Close dialog', exact: true }).click();
+
+  await page.goto('/finance');
+  await page.getByRole('button', { name: 'New transaction', exact: true }).click();
+  await entry.getByLabel('Member', { exact: true }).selectOption(memberId);
+  await entry.getByLabel('Cash or bank account', { exact: true }).selectOption(cash.id);
+  await entry.getByLabel('Amount (BDT)').fill('15.25');
+  await entry.getByLabel('Receipt / reference (optional)').fill('Duplicate receipt');
+  await entry.getByRole('button', { name: 'Submit for approval', exact: true }).click();
+  await expect(entry).not.toBeVisible();
+  const duplicate = await db.financialTransaction.findFirstOrThrow({ where: { societyId, reference: 'Duplicate receipt' } });
+  await approverPage.goto('/approvals');
+  await approverPage.getByRole('row').filter({ hasText: duplicate.transactionNo }).getByRole('button', { name: 'Review', exact: true }).click();
+  const review = approverPage.getByRole('dialog', { name: duplicate.transactionNo, exact: true });
+  await review.getByLabel('Decision').selectOption('REJECT');
+  await review.getByLabel('Reason for rejection').fill('The receipt was already recorded.');
+  await review.getByRole('button', { name: 'Reject request', exact: true }).click();
+  await expect(review.getByText('Rejected', { exact: true })).toBeVisible();
+  await expect(review.getByRole('button', { name: 'Delete rejected transaction' })).toHaveCount(0);
+
+  await signOut(page); await signIn(page, 'SOCIETY_ADMIN');
+  await page.getByRole('link', { name: 'Finance', exact: true }).click();
+  const duplicateRow = page.getByRole('row').filter({ hasText: duplicate.transactionNo });
+  await duplicateRow.getByRole('button', { name: 'Review', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete rejected transaction', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Delete rejected transaction?', exact: true }).getByRole('button', { name: 'Delete transaction', exact: true }).click();
+  await expect(duplicateRow).toHaveCount(0);
+  await page.getByRole('button', { name: 'Transaction log', exact: true }).click();
+  await page.getByLabel('Transaction number').fill(duplicate.transactionNo);
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  await expect(page.getByRole('row').filter({ hasText: duplicate.transactionNo })).toHaveCount(3);
+  await expect(page.getByRole('cell', { name: 'Deleted', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'The receipt was already recorded.', exact: true })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Activity log', exact: true }).click();
+  await page.getByLabel('Performed by role').selectOption('APPROVER');
+  await page.getByLabel('Action', { exact: true }).selectOption('FINANCE_REJECTED');
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  const rejection = page.getByRole('row').filter({ hasText: duplicate.transactionNo });
+  await expect(rejection).toContainText('Rejected a transaction');
+  await expect(rejection).toContainText('Browser APPROVER');
+
   await signOut(page);await signIn(page,'MEMBER');await expect(page.getByRole('cell',{name:'৳ 80.01',exact:true})).toBeVisible();
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('member-loans-mobile.png'),fullPage:true,animations:'disabled'});
+  await page.getByRole('button', { name: 'Open navigation' }).click();
+  await page.getByRole('link', { name: 'Activity log', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Viewed a member profile', exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel('Activity scope')).toHaveCount(0);
+  await expect(page.getByRole('cell', { name: /Browser APPROVER/ })).toHaveCount(0);
+  await approverPage.goto('/activity');
+  await expect(approverPage.getByRole('row').filter({ hasText: duplicate.transactionNo }).filter({ hasText: 'Rejected a transaction' })).toBeVisible();
+  await expect(approverPage.getByLabel('Activity scope')).toHaveCount(0);
+  await expect(approverPage.getByRole('cell', { name: /Browser MEMBER/ })).toHaveCount(0);
   await approverContext.close();
   expect(errors).toEqual([]);
 });

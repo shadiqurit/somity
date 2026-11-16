@@ -8,3 +8,10 @@ export async function assertActiveSociety(tx: Prisma.TransactionClient, societyI
   const societies = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM societies WHERE id = ${societyId} AND isActive = true FOR SHARE`;
   if (!societies.length) throw new AppError(403, 'This society is not available');
 }
+
+// Financial writes and membership termination use the same exclusive lock.
+export async function lockActiveSociety(tx: Prisma.TransactionClient, societyId: string) {
+  const [society] = await tx.$queryRaw<{ currency: string }[]>`SELECT currency FROM societies WHERE id = ${societyId} AND isActive = true FOR UPDATE`;
+  if (!society) throw new AppError(403, 'This society is not available');
+  return society;
+}

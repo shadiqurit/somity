@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { db } from '../config/database.js';
 import { env } from '../config/env.js';
 import { AppError } from '../utils/errors.js';
+import { withAuditActor } from '../services/audit.js';
 import { canSignIn, publicUser, userInclude } from '../modules/auth/auth.service.js';
 
 export type Principal = Awaited<ReturnType<typeof publicUser>>;
@@ -21,7 +22,7 @@ export const authenticate: RequestHandler = async (req, _res, next) => {
   const societyId = req.get('X-Society-Id');
   if (societyId && (societyId.length > 30 || !/^[a-zA-Z0-9_-]+$/.test(societyId))) throw new AppError(400, 'Invalid society selection');
   req.user = await publicUser(session.user, societyId);
-  next();
+  withAuditActor({ id: req.user.id, role: req.user.roles[0] }, next);
 };
 export const requirePasswordChanged: RequestHandler = (req, _res, next) => {
   if (req.user.mustChangePassword) throw new AppError(403, 'Change your temporary password first');

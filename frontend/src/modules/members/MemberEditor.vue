@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, useId } from 'vue';
 import { Check, Pencil, Plus, ShieldCheck, Trash2, UserRound, Users } from 'lucide-vue-next';
 import { api, errorMessage } from '../../services/api';
 import { statusOptions, type Member, type Nominee } from './types';
@@ -15,11 +15,29 @@ import LoadingState from '../../components/ui/LoadingState.vue';
 const props = defineProps<{ memberId?: string }>();
 const emit = defineEmits<{ saved: [member: Member, photoError?: string]; cancel: []; busy: [value: boolean] }>();
 const isEdit = computed(() => !!props.memberId);
+const initialStatus = ref<string>();
+const membershipOptions = computed(() => isEdit.value ? statusOptions : statusOptions.filter(option => option.value !== 'CLOSED'));
+const closureHintId = useId();
 const loading = ref(false); const busy = ref(false); const error = ref('');
 const loaded = ref(!isEdit.value); const photo = ref<File>(); const formElement = ref<HTMLElement>();
 const existingPhotoId = ref<string>(); const removeExistingPhoto = ref(false);
-const emptyNominee = (): Nominee => ({ fullName: '', relationship: '', phone: '', address: '', sharePercent: '100' });
-const form = ref({ fullName: '', phone: '', email: '', address: '', joinedAt: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()), status: 'ACTIVE', nominees: [] as Nominee[], version: 1 });
+type NomineeDraft = Omit<Nominee, 'identityNumber'> & { identityNumber: string };
+const emptyNominee = (): NomineeDraft => ({ fullName: '', identityNumber: '', relationship: '', phone: '', address: '', sharePercent: '100' });
+const form = ref({
+  fullName: '',
+  phone: '',
+  email: '',
+  identityNumber: '',
+  dateOfBirth: '',
+  nationality: '',
+  address: '',
+  permanentAddress: '',
+  joinedAt: new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()),
+  status: 'ACTIVE',
+  nominees: [] as NomineeDraft[],
+  version: 1,
+});
+const closingMembership = computed(() => form.value.status === 'CLOSED' && initialStatus.value !== 'CLOSED');
 const shareTotal = computed(() => form.value.nominees.reduce((sum, n) => sum + Math.round(Number(n.sharePercent) * 100), 0) / 100);
 const nomineeOpen = ref(false); const nomineeIndex = ref<number | null>(null); const nomineeDraft = ref(emptyNominee()); const nomineeError = ref('');
 function openNominee(index: number | null = null) {
@@ -39,7 +57,23 @@ async function load() {
   try {
     const { data } = await api.get<Member>(`/members/${props.memberId}`);
     existingPhotoId.value = data.documents[0]?.id;
-    form.value = { fullName: data.fullName, phone: data.phone, email: data.email ?? '', address: data.address, joinedAt: data.joinedAt.slice(0, 10), status: data.status, version: data.version, nominees: data.nominees.map(n => ({ fullName: n.fullName, phone: n.phone, address: n.address, relationship: n.relationship, sharePercent: n.sharePercent })) };
+    initialStatus.value = data.status;
+    form.value = {
+      fullName: data.fullName,
+      phone: data.phone,
+      email: data.email ?? '',
+      identityNumber: data.identityNumber ?? '',
+      dateOfBirth: data.dateOfBirth?.slice(0, 10) ?? '',
+      nationality: data.nationality ?? '',
+      address: data.address,
+      permanentAddress: data.permanentAddress ?? '',
+      joinedAt: data.joinedAt.slice(0, 10),
+      status: data.status,
+      version: data.version,
+      nominees: data.nominees.map(({ fullName, identityNumber, phone, address, relationship, sharePercent }) => ({
+        fullName, identityNumber: identityNumber ?? '', phone, address, relationship, sharePercent,
+      })),
+    };
     loaded.value = true;
   } catch (e) { error.value = errorMessage(e); } finally { loading.value = false; }
 }
@@ -75,9 +109,16 @@ onMounted(load);
           <AppInput v-model="form.fullName" label="Full name" placeholder="Enter the member’s full name" required minlength="2" maxlength="120" autocomplete="name" />
           <AppInput v-model="form.phone" label="Phone number" type="tel" placeholder="+880 1XXXXXXXXX" required maxlength="25" autocomplete="tel" />
           <AppInput v-model="form.email" label="Email address (optional)" type="email" placeholder="member@example.com" maxlength="191" autocomplete="email" />
+          <AppInput v-model="form.identityNumber" label="NID / Birth certificate no. (optional)" maxlength="40" />
+          <AppInput v-model="form.dateOfBirth" label="Date of birth (optional)" type="date" autocomplete="bday" />
+          <AppInput v-model="form.nationality" label="Nationality (optional)" maxlength="120" />
           <AppDatePicker v-model="form.joinedAt" label="Membership date" />
-          <AppSelect v-model="form.status" label="Membership status" :options="statusOptions" />
-          <label class="field full-span"><span>Address</span><textarea v-model="form.address" placeholder="House, road, area and district" required minlength="3" maxlength="500" rows="2" autocomplete="street-address"></textarea></label>
+          <div>
+            <AppSelect v-model="form.status" label="Membership status" :options="membershipOptions" :disabled="initialStatus === 'CLOSED'" :aria-describedby="closingMembership ? closureHintId : undefined" />
+            <small v-if="closingMembership" :id="closureHintId" class="muted">Clear savings, settle all loan installments, and resolve pending transactions before closing. Closing disables the member’s login.</small>
+          </div>
+          <label class="field full-span"><span>Present address</span><textarea v-model="form.address" placeholder="House, road, area and district" required minlength="3" maxlength="500" rows="2" autocomplete="street-address"></textarea></label>
+          <label class="field full-span"><span>Permanent address (optional)</span><textarea v-model="form.permanentAddress" placeholder="House, road, area and district" maxlength="500" rows="2"></textarea></label>
         </div>
         <FileUploader :document-id="existingPhotoId" :name="form.fullName" :removed="removeExistingPhoto" @selected="photo = $event; removeExistingPhoto = false" @cleared="photo = undefined" @remove="photo = undefined; removeExistingPhoto = true" @restore="removeExistingPhoto = false" />
       </section>
@@ -94,7 +135,7 @@ onMounted(load);
         </div>
         <div :class="['share-total', { complete: shareTotal === 100 }]"><span><Check v-if="shareTotal === 100" :size="17" /><ShieldCheck v-else :size="17" />Total nominee allocation</span><strong>{{ shareTotal.toFixed(2) }} / 100%</strong></div>
       </section>
-      <div class="form-actions entry-actions"><span class="entry-hint">Review the details before saving.</span><AppButton variant="secondary" @click="$emit('cancel')">Cancel</AppButton><AppButton type="submit" :loading="busy">{{ isEdit ? 'Save changes' : 'Create member' }}</AppButton></div>
+      <div class="form-actions entry-actions"><span class="entry-hint">Review the details before saving.</span><AppButton variant="secondary" @click="$emit('cancel')">Cancel</AppButton><AppButton type="submit" :variant="closingMembership ? 'danger' : 'primary'" :loading="busy">{{ closingMembership ? 'Close membership' : isEdit ? 'Save changes' : 'Create member' }}</AppButton></div>
     </AppForm>
   </div>
   <AppModal :open="nomineeOpen" :title="nomineeIndex === null ? 'Add nominee' : 'Edit nominee'" description="Enter nominee details, then save them to the member’s nominee list." @close="nomineeOpen = false">
@@ -102,6 +143,7 @@ onMounted(load);
       <AppInput v-model="nomineeDraft.fullName" label="Nominee full name" placeholder="Enter full name" required minlength="2" maxlength="120" />
       <div class="form-grid"><AppInput v-model="nomineeDraft.relationship" label="Relationship" placeholder="e.g. Spouse, daughter" required minlength="2" maxlength="80" /><AppInput v-model="nomineeDraft.sharePercent" label="Share (%)" type="number" min="0.01" max="100" step="0.01" required /></div>
       <AppInput v-model="nomineeDraft.phone" label="Nominee phone" type="tel" placeholder="+880 1XXXXXXXXX" required maxlength="25" />
+      <AppInput v-model="nomineeDraft.identityNumber" label="Nominee NID / Birth certificate no. (optional)" maxlength="40" />
       <label class="field"><span>Nominee address</span><textarea v-model="nomineeDraft.address" placeholder="Enter the nominee’s address" required minlength="3" maxlength="500" rows="2"></textarea></label>
       <div class="form-actions"><AppButton variant="secondary" @click="nomineeOpen = false">Cancel</AppButton><AppButton type="submit">{{ nomineeIndex === null ? 'Add to nominee list' : 'Save nominee' }}</AppButton></div>
     </AppForm>

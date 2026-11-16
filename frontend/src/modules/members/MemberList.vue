@@ -9,7 +9,8 @@ const entryId = computed(() => route.query.entry && route.query.entry !== 'new' 
 function openEntry(id = 'new') { void router.push({ query: { ...route.query, entry: id } }); }
 async function closeEntry() { const { entry, ...query } = route.query; await router.replace({ query }); }
 async function saved(member: Member, uploadError?: string) { notice.value = `${member.fullName} saved successfully.`; photoWarning.value = uploadError ? `Profile saved, but photo change failed: ${uploadError}. Open the profile to retry.` : ''; await closeEntry(); await load(); }
-const auth = useAuthStore(); const { t } = useLocale(); const rows = ref<Member[]>([]); const total = ref(0); const pages = ref(1); const page = ref(1); const pageSize = ref('10'); const search = ref(''); const status = ref(''); const sort = ref('createdAt'); const direction = ref('desc'); const busy = ref(false); const error = ref(''); let timer: ReturnType<typeof setTimeout>; let sequence = 0;
+type DirectoryEntry = Pick<Member, 'id' | 'fullName' | 'memberNo' | 'phone' | 'email' | 'joinedAt' | 'status' | 'documents'>;
+const auth = useAuthStore(); const { t } = useLocale(); const rows = ref<DirectoryEntry[]>([]); const total = ref(0); const pages = ref(1); const page = ref(1); const pageSize = ref('10'); const search = ref(''); const status = ref(''); const sort = ref('createdAt'); const direction = ref('desc'); const busy = ref(false); const error = ref(''); let timer: ReturnType<typeof setTimeout>; let sequence = 0;
 const columns = [{ key: 'fullName', label: 'Member', sortable: true }, { key: 'memberNo', label: 'Member number', sortable: true }, { key: 'phone', label: 'Contact details' }, { key: 'joinedAt', label: 'Joined' }, { key: 'status', label: 'Status' }, { key: 'action', label: '' }];
 async function load() {
   const request = ++sequence; busy.value = true; error.value = '';

@@ -5,7 +5,7 @@ import { db } from '../../config/database.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
 import { hashPassword, verifyPassword } from '../../utils/password.js';
-import { audit } from '../../services/audit.js';
+import { audit, withAuditActor } from '../../services/audit.js';
 
 const roleInclude = { permissions: { include: { permission: true } } } as const;
 export const userInclude = {
@@ -39,6 +39,9 @@ export async function publicUser(user: FullUser, requestedSocietyId?: string) {
   };
 }
 export const digest = (value: string) => createHash('sha256').update(value).digest('hex');
+function accountAuditSociety(principal: Pick<Awaited<ReturnType<typeof publicUser>>, 'roles' | 'societyId'>) {
+  return principal.roles.some(role => role === 'ADMIN' || role === 'SUPER_ADMIN') ? undefined : principal.societyId ?? undefined;
+}
 function sessionData(userId: string, familyId: string = randomUUID()) {
   const refreshToken = randomBytes(48).toString('base64url');
   return { refreshToken, data: { userId, familyId, tokenHash: digest(refreshToken), expiresAt: new Date(Date.now() + 7 * 86400000) } };
@@ -58,14 +61,15 @@ export async function login(email: string, password: string) {
   const user = await db.user.findUnique({ where: { email }, include: userInclude });
   const valid = await verifyPassword(password, user?.passwordHash ?? await dummyHash);
   if (!user || !valid || !canSignIn(user)) throw new AppError(401, 'Invalid email or password');
+  const principal = await publicUser(user);
   const next = sessionData(user.id);
   const session = await db.$transaction(async tx => {
     await requireCurrentPasswordHash(tx, user.id, user.passwordHash);
     const session = await tx.refreshSession.create({ data: next.data });
-    await audit(tx, user.id, 'AUTH_LOGIN', 'user', user.id);
+    await withAuditActor({ id: user.id, role: principal.roles[0] }, () => audit(tx, user.id, 'AUTH_LOGIN', 'user', user.id, undefined, accountAuditSociety(principal)));
     return session;
   });
-  return { accessToken: accessToken(user.id, session.id), refreshToken: next.refreshToken, user: await publicUser(user) };
+  return { accessToken: accessToken(user.id, session.id), refreshToken: next.refreshToken, user: principal };
 }
 export async function refresh(token: string, societyId?: string) {
   const session = await db.refreshSession.findUnique({ where: { tokenHash: digest(token) }, include: { user: { include: userInclude } } });
@@ -85,19 +89,30 @@ export async function refresh(token: string, societyId?: string) {
   });
   return { accessToken: accessToken(session.userId, rotated.id), refreshToken: next.refreshToken, user: principal };
 }
-export async function logout(token?: string) {
+export async function logout(token?: string, societyId?: string) {
   if (!token) return;
-  const session = await db.refreshSession.findUnique({ where: { tokenHash: digest(token) } });
-  if (session) await db.refreshSession.updateMany({ where: { familyId: session.familyId, revokedAt: null }, data: { revokedAt: new Date() } });
+  const session = await db.refreshSession.findUnique({ where: { tokenHash: digest(token) }, include: { user: { include: userInclude } } });
+  if (!session) return;
+  const platform = platformRole(session.user);
+  const memberships = activeMemberships(session.user);
+  const membership = memberships.find(m => m.societyId === societyId) ?? memberships[0];
+  await db.$transaction(async tx => {
+    const revoked = await tx.refreshSession.updateMany({ where: { familyId: session.familyId, revokedAt: null }, data: { revokedAt: new Date() } });
+    if (revoked.count) {
+      await withAuditActor({ id: session.userId, role: (platform ?? membership?.role)?.code }, () =>
+        audit(tx, session.userId, 'AUTH_LOGOUT', 'user', session.userId, undefined, platform ? undefined : membership?.societyId));
+    }
+  });
 }
-export async function changePassword(userId: string, currentPassword: string, newPassword: string) {
+export async function changePassword(principal: Awaited<ReturnType<typeof publicUser>>, currentPassword: string, newPassword: string) {
+  const userId = principal.id;
   const user = await db.user.findUniqueOrThrow({ where: { id: userId } });
   if (!await verifyPassword(currentPassword, user.passwordHash)) throw new AppError(400, 'Current password is incorrect');
   const passwordHash = await hashPassword(newPassword);
   await db.$transaction(async tx => {
     await requireCurrentPasswordHash(tx, userId, user.passwordHash);
     await replacePassword(tx, userId, passwordHash, false);
-    await audit(tx, userId, 'PASSWORD_CHANGED', 'user', userId);
+    await audit(tx, userId, 'PASSWORD_CHANGED', 'user', userId, undefined, accountAuditSociety(principal));
   });
 }
 

@@ -10,6 +10,7 @@ enum MemberStatus {
   ACTIVE
   INACTIVE
   SUSPENDED
+  CLOSED
 }
 
 enum DocumentKind {
@@ -104,7 +105,11 @@ model Member {
   fullName    String           @db.VarChar(120)
   phone       String           @db.VarChar(25)
   email       String? @db.VarChar(191)
+  identityNumber String?        @db.VarChar(40)
+  dateOfBirth DateTime?         @db.Date
+  nationality String?           @db.VarChar(120)
   address     String           @db.VarChar(500)
+  permanentAddress String?     @db.VarChar(500)
   joinedAt    DateTime         @db.Date
   status      MemberStatus     @default(ACTIVE)
   version     Int              @default(1)
@@ -137,6 +142,7 @@ model Nominee {
   relationship String @db.VarChar(80)
   phone        String @db.VarChar(25)
   address      String @db.VarChar(500)
+  identityNumber String? @db.VarChar(40)
   sharePercent Decimal @db.Decimal(5, 2)
   member       Member @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict)
 
@@ -165,6 +171,7 @@ model AuditLog {
   society    Society? @relation(fields: [societyId], references: [id], onDelete: Restrict)
   id         String   @id @default(cuid()) @db.VarChar(30)
   actorId    String?  @db.VarChar(30)
+  actorRole  String?  @db.VarChar(40)
   action     String   @db.VarChar(80)
   entityType String   @db.VarChar(60)
   entityId   String   @db.VarChar(64)
@@ -172,7 +179,12 @@ model AuditLog {
   createdAt  DateTime @default(now()) @db.DateTime(3)
   actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
-  @@index([societyId, entityType, entityId, createdAt])
+  @@index([societyId, entityType, entityId, createdAt, id], map: "audit_logs_entity_history_idx")
+  @@index([societyId, entityType, createdAt, id], map: "audit_logs_society_history_idx")
+  @@index([societyId, entityType, action, createdAt, id], map: "audit_logs_action_history_idx")
+  @@index([societyId, createdAt, id], map: "audit_logs_activity_idx")
+  @@index([societyId, action, createdAt, id], map: "audit_logs_activity_action_idx")
+  @@index([societyId, actorRole, createdAt, id], map: "audit_logs_activity_role_idx")
   @@index([actorId, createdAt])
   @@index([createdAt])
   @@map("audit_logs")
@@ -338,6 +350,7 @@ model FinancialTransaction {
   reversalOfId String? @db.VarChar(30)
   createdAt DateTime @default(now()) @db.DateTime(3)
   postedAt DateTime? @db.DateTime(3)
+  deletedAt DateTime? @db.DateTime(3)
   society Society @relation(fields: [societyId], references: [id], onDelete: Restrict)
   member Member? @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict)
   loan Loan? @relation("LoanMovements", fields: [societyId, loanId], references: [societyId, id], onDelete: Restrict, onUpdate: Restrict)
@@ -354,7 +367,9 @@ model FinancialTransaction {
   @@unique([societyId, id])
   @@unique([societyId, transactionNo])
   @@unique([societyId, idempotencyKey])
-  @@index([societyId, status, createdAt])
+  @@index([societyId, deletedAt, createdAt, id], map: "transactions_visible_history_idx")
+  @@index([societyId, status, deletedAt, createdAt, id], map: "transactions_status_history_idx")
+  @@index([societyId, type, deletedAt, createdAt, id], map: "transactions_type_history_idx")
   @@index([societyId, memberId, effectiveDate, status])
   @@index([societyId, reversalOfId])
   @@index([societyId, cashAccountId])

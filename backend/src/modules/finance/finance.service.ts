@@ -2,10 +2,11 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import type { z } from 'zod';
 import { db } from '../../config/database.js';
-import { audit } from '../../services/audit.js';
+import { audit, auditPageFilter } from '../../services/audit.js';
+import { lockActiveSociety } from '../../services/tenant.js';
 import { AppError } from '../../utils/errors.js';
 import { productLines, isAsset, principalSchedule } from './finance.posting.js';
-import type { accountSchema, policySchema, reversalSchema, decisionSchema, TransactionInput, FinanceListInput } from './finance.validator.js';
+import type { accountSchema, policySchema, reversalSchema, decisionSchema, transactionLogSchema, TransactionInput, FinanceListInput } from './finance.validator.js';
 
 // Match MySQL aggregate precision so large balances retain their cents.
 Prisma.Decimal.set({ precision: 65 });
@@ -27,11 +28,30 @@ function financialMutation<T>(societyId: string, action: (tx: Tx) => Promise<T>)
   return db.$transaction(async tx => {
     // Serialize financial writes per society. This also prevents concurrent
     // approvals/withdrawals from spending the same balance or posting twice.
-    const rows = await tx.$queryRaw<{ currency: string }[]>`SELECT currency FROM societies WHERE id = ${societyId} AND isActive = true FOR UPDATE`;
-    if (!rows.length) throw new AppError(403, 'This society is not available');
-    if (rows[0]!.currency !== 'BDT') throw new AppError(422, 'Phase 2 currently supports BDT societies only');
+    const { currency } = await lockActiveSociety(tx, societyId);
+    if (currency !== 'BDT') throw new AppError(422, 'Phase 2 currently supports BDT societies only');
     return action(tx);
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted, timeout: 15000 });
+}
+
+function postedMemberEntries(societyId: string, memberId: string, kind: 'MEMBER_SAVINGS' | 'LOAN_RECEIVABLE') {
+  return { societyId, memberId, account: { kind }, transaction: { status: 'POSTED' as const } };
+}
+
+export async function assertMemberSettled(tx: Tx, societyId: string, memberId: string) {
+  const [savings, loan, pending] = await Promise.all([
+    tx.ledgerEntry.aggregate({ where: postedMemberEntries(societyId, memberId, 'MEMBER_SAVINGS'), _sum: { debit: true, credit: true } }),
+    tx.ledgerEntry.aggregate({ where: postedMemberEntries(societyId, memberId, 'LOAN_RECEIVABLE'), _sum: { debit: true, credit: true } }),
+    tx.financialTransaction.findFirst({ where: { societyId, memberId, status: 'PENDING' }, select: { id: true } }),
+  ]);
+  const savingsBalance = (savings._sum.credit ?? zero()).minus(savings._sum.debit ?? zero());
+  // Loan installments are principal-only, so this balance includes all unpaid installments.
+  const loanBalance = (loan._sum.debit ?? zero()).minus(loan._sum.credit ?? zero());
+  const blockers = [];
+  if (!loanBalance.isZero()) blockers.push(`Settle the outstanding loan balance (${money(loanBalance)} BDT).`);
+  if (!savingsBalance.isZero()) blockers.push(`Clear the savings balance (${money(savingsBalance)} BDT).`);
+  if (pending) blockers.push('Resolve all pending member transactions.');
+  if (blockers.length) throw new AppError(409, blockers.join(' '));
 }
 export async function policy(societyId: string) {
   return (await db.financePolicy.findUnique({ where: { societyId } })) ?? { societyId, version: 0, requiredApprovals: 1, allowSelfApproval: false };
@@ -69,7 +89,7 @@ export async function accounts(societyId: string) {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 export async function list(societyId: string, input: FinanceListInput) {
-  const where: Prisma.FinancialTransactionWhereInput = { societyId, ...(input.status ? { status: input.status } : {}), ...(input.type ? { type: input.type } : {}), ...(input.memberId ? { memberId: input.memberId } : {}), effectiveDate: dateRange(input) };
+  const where: Prisma.FinancialTransactionWhereInput = { societyId, deletedAt: null, ...(input.status ? { status: input.status } : {}), ...(input.type ? { type: input.type } : {}), ...(input.memberId ? { memberId: input.memberId } : {}), effectiveDate: dateRange(input) };
   if (input.scope === 'income') {
     const income: Prisma.FinancialTransactionWhereInput = {
       OR: [
@@ -88,15 +108,42 @@ export async function list(societyId: string, input: FinanceListInput) {
   ], { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   return { items: items.map(item => ({ ...item, amount: money(item.amount) })), total, page: input.page, pageSize: input.pageSize, pages: Math.ceil(total / input.pageSize) };
 }
+
+export async function transactionLog(societyId: string, input: z.infer<typeof transactionLogSchema>) {
+  const where: Prisma.AuditLogWhereInput = { societyId, entityType: 'transaction', action: input.action ?? { not: 'FINANCE_TRANSACTION_VIEWED' } };
+  if (input.transactionNo) {
+    const transaction = await db.financialTransaction.findUnique({
+      where: { societyId_transactionNo: { societyId, transactionNo: input.transactionNo } }, select: { id: true },
+    });
+    if (!transaction) return { items: [], nextCursor: null };
+    where.entityId = transaction.id;
+  }
+  const events = await db.auditLog.findMany({
+    where: await auditPageFilter(where, input.after), orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: input.limit + 1,
+    select: { id: true, entityId: true, action: true, changes: true, createdAt: true, actor: { select: { id: true, name: true } } },
+  });
+  const page = events.slice(0, input.limit);
+  const transactions = page.length ? await db.financialTransaction.findMany({
+    where: { societyId, id: { in: [...new Set(page.map(event => event.entityId))] } },
+    select: { id: true, transactionNo: true, amount: true, deletedAt: true },
+  }) : [];
+  const transactionsById = new Map(transactions.map(row => [row.id, { ...row, amount: money(row.amount) }]));
+  return {
+    items: page.map(event => ({ ...event, transaction: transactionsById.get(event.entityId) ?? null })),
+    nextCursor: events.length > input.limit ? page.at(-1)!.id : null,
+  };
+}
+
 export async function get(societyId: string, id: string, tx: Tx = db) {
   const item = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } }, include: { ...detailInclude, entries: { orderBy: { line: 'asc' }, include: { account: { select: { code: true, name: true } } } } } });
-  if (!item) throw new AppError(404, 'Transaction not found');
+  if (!item || item.deletedAt) throw new AppError(404, 'Transaction not found');
   return { ...item, amount: money(item.amount) };
 }
 async function replay(tx: Tx, societyId: string, key: string, hash: string) {
   const item = await tx.financialTransaction.findUnique({ where: { societyId_idempotencyKey: { societyId, idempotencyKey: key } } });
   if (!item) return null;
   if (item.requestHash !== hash) throw new AppError(409, 'This submission key was used for a different request');
+  if (item.deletedAt) throw new AppError(409, 'This request was deleted. Use a new submission key to submit it again.');
   return get(societyId, item.id, tx);
 }
 const requestHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -110,8 +157,9 @@ export async function submit(societyId: string, actorId: string, input: Transact
     const account = await tx.ledgerAccount.findFirst({ where: { id: input.cashAccountId, societyId, isActive: true, kind: { in: ['CASH', 'BANK'] } } });
     if (!account) throw new AppError(404, 'Active cash or bank account not found in this society');
     if (input.loanId) {
-      const loan = await tx.loan.findUnique({ where: { societyId_id: { societyId, id: input.loanId } }, include: { disbursement: true } });
+      const loan = await tx.loan.findUnique({ where: { societyId_id: { societyId, id: input.loanId } }, include: { disbursement: true, member: { select: { status: true } } } });
       if (!loan) throw new AppError(404, 'Loan not found in this society');
+      if (loan.member.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
       memberId = loan.memberId;
       await assertProductDate(tx, societyId, loan.disbursement, new Date(input.effectiveDate));
     }
@@ -139,8 +187,9 @@ export async function requestReversal(societyId: string, actorId: string, id: st
   const hash = requestHash({ actorId, reversalOfId: id, ...input });
   return financialMutation(societyId, async tx => {
     const prior = await replay(tx, societyId, key, hash); if (prior) return prior;
-    const original = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } } });
-    if (!original) throw new AppError(404, 'Transaction not found');
+    const original = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } }, include: { member: { select: { status: true } } } });
+    if (!original || original.deletedAt) throw new AppError(404, 'Transaction not found');
+    if (original.member?.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
     if (original.status !== 'POSTED' || original.type === 'REVERSAL') throw new AppError(409, 'Only an original posted transaction can be reversed');
     if (new Date(input.effectiveDate) < original.effectiveDate) throw new AppError(422, 'Reversal date cannot precede the original transaction');
     if (await tx.financialTransaction.findFirst({ where: { societyId, reversalOfId: id, status: { in: ['PENDING', 'POSTED'] } } })) throw new AppError(409, 'A reversal is already pending or posted');
@@ -179,7 +228,11 @@ export function balancedLines(amount: Prisma.Decimal, cashAccountId: string, sav
 }
 async function post(tx: Tx, societyId: string, id: string, actorId: string) {
   let item = await tx.financialTransaction.findUniqueOrThrow({ where: { societyId_id: { societyId, id } } });
-  if (item.type !== 'REVERSAL' && item.memberId && item.type !== 'LOAN_REPAYMENT' && !await tx.member.findFirst({ where: { id: item.memberId, societyId, archivedAt: null, status: 'ACTIVE' } })) throw new AppError(409, 'Member is no longer active');
+  if (item.memberId) {
+    const member = await tx.member.findUniqueOrThrow({ where: { societyId_id: { societyId, id: item.memberId } }, select: { status: true, archivedAt: true } });
+    if (member.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
+    if (item.type !== 'REVERSAL' && item.type !== 'LOAN_REPAYMENT' && (member.archivedAt || member.status !== 'ACTIVE')) throw new AppError(409, 'Member is no longer active');
+  }
   if (item.type === 'LOAN_REPAYMENT') {
     const loan = await tx.loan.findUniqueOrThrow({ where: { societyId_id: { societyId, id: item.loanId! } }, include: { disbursement: true } });
     await assertProductDate(tx, societyId, loan.disbursement, item.effectiveDate);
@@ -208,7 +261,7 @@ async function post(tx: Tx, societyId: string, id: string, actorId: string) {
 export async function decide(societyId: string, actorId: string, id: string, input: z.infer<typeof decisionSchema>) {
   return financialMutation(societyId, async tx => {
     const item = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } }, include: { decisions: true } });
-    if (!item) throw new AppError(404, 'Transaction not found');
+    if (!item || item.deletedAt) throw new AppError(404, 'Transaction not found');
     if (item.status !== 'PENDING') throw new AppError(409, 'This request has already been completed');
     if (!item.allowSelfApproval && item.createdById === actorId) throw new AppError(403, 'You cannot approve or reject your own request');
     if (item.decisions.some(d => d.approverId === actorId)) throw new AppError(409, 'You have already decided on this request');
@@ -223,7 +276,7 @@ export async function decide(societyId: string, actorId: string, id: string, inp
 export async function cancel(societyId: string, actorId: string, id: string) {
   return financialMutation(societyId, async tx => {
     const item = await tx.financialTransaction.findUnique({ where: { societyId_id: { societyId, id } } });
-    if (!item) throw new AppError(404, 'Transaction not found');
+    if (!item || item.deletedAt) throw new AppError(404, 'Transaction not found');
     if (item.createdById !== actorId) throw new AppError(403, 'Only the requester can cancel a pending request');
     if (item.status !== 'PENDING') throw new AppError(409, 'Only pending requests can be cancelled; posted transactions require a reversal');
     await tx.financialTransaction.update({ where: { societyId_id: { societyId, id } }, data: { status: 'CANCELLED' } });
@@ -231,11 +284,23 @@ export async function cancel(societyId: string, actorId: string, id: string) {
     return get(societyId, id, tx);
   });
 }
+
+export async function removeRejected(societyId: string, actorId: string, id: string) {
+  await financialMutation(societyId, async tx => {
+    const where = { societyId_id: { societyId, id } };
+    const item = await tx.financialTransaction.findUnique({ where, select: { status: true, deletedAt: true, transactionNo: true } });
+    if (!item) throw new AppError(404, 'Transaction not found');
+    if (item.status !== 'REJECTED') throw new AppError(409, 'Only rejected transactions can be deleted');
+    if (item.deletedAt) return;
+    await tx.financialTransaction.update({ where, data: { deletedAt: new Date() } });
+    await audit(tx, actorId, 'FINANCE_DELETED', 'transaction', id, { transactionNo: item.transactionNo }, societyId);
+  });
+}
 export async function statement(societyId: string, memberId: string, input: Range & { page: number; pageSize: number }) {
   return db.$transaction(async tx => {
     const member = await tx.member.findUnique({ where: { societyId_id: { societyId, id: memberId } }, select: { id: true, fullName: true, memberNo: true } });
     if (!member) throw new AppError(404, 'Member not found');
-    const base: Prisma.LedgerEntryWhereInput = { societyId, memberId, account: { kind: 'MEMBER_SAVINGS' }, transaction: { status: 'POSTED' } };
+    const base = postedMemberEntries(societyId, memberId, 'MEMBER_SAVINGS');
     const openingTotals = await tx.ledgerEntry.aggregate({ where: { ...base, transaction: { status: 'POSTED', effectiveDate: { lt: new Date(input.from ?? '1000-01-01') } } }, _sum: { debit: true, credit: true } });
     const opening = (openingTotals._sum.credit ?? zero()).minus(openingTotals._sum.debit ?? zero());
     const where = { ...base, transaction: { status: 'POSTED' as const, effectiveDate: dateRange(input) } };

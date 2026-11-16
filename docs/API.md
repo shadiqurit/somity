@@ -1,5 +1,11 @@
 # Phase 1 and Phase 2 REST API
 
+## Activity log
+
+`GET /api/activity` requires `activity.read` and a selected society. `GET /api/activity/me` returns the signed-in account’s personal and selected-society events. `GET /api/activity/platform` gives Super Admin access across societies. Each feed accepts `action`, `actorRole`, `limit` (max 100), and `after` (the previous response’s `nextCursor`).
+
+Events show the action, actor, recorded role, target, society and time. Older audit records can have an unrecorded role. The activity endpoints return event metadata without the stored audit payload. `POST /api/auth/select-society` validates the `X-Society-Id` selection and records it as an activity event.
+
 ## Phase 2 finance endpoints
 
 Loan/investment/expense/transfer entry types and report routes are documented in [FINANCIAL_MODULES.md](FINANCIAL_MODULES.md). Society transactions can have `member: null`; clients must handle this when displaying finance history and ledger lines.
@@ -15,6 +21,8 @@ All routes below require authentication, a changed initial password and an activ
 | GET `/finance/transactions` | finance.read | Paginated requests/history; page/pageSize (max 100), optional status/type/memberId/from/to. |
 | POST `/finance/transactions` | finance.write | Submit DEPOSIT/WITHDRAWAL: type, memberId, cashAccountId, amount, effectiveDate, optional reference/note. Requires `Idempotency-Key` header (16–80 letters/numbers/hyphens/underscores). |
 | GET `/finance/transactions/:id` | finance.read | Request, captured policy, decision history, original/reversal links and posted entries. |
+| DELETE `/finance/transactions/:id` | finance.delete | Removes a rejected request from the transaction list. Retains its record, decisions, and audit history. Returns 204. Available to Society Admin, Admin, and Super Admin within the selected society. |
+| GET `/finance/transaction-log` | finance.read | Newest-first audit events, including deleted requests. Accepts `transactionNo`, `action`, `limit` (max 100), and `after` (the previous response’s `nextCursor`). |
 | POST `/finance/transactions/:id/decision` | finance.approve | decision APPROVE/REJECT, optional comment (reason of at least 5 characters required for REJECT). Final approval posts atomically. |
 | POST `/finance/transactions/:id/cancel` | finance.write | Requester cancels a pending request. No posted data is deleted. |
 | POST `/finance/transactions/:id/reversal` | finance.write | effectiveDate and reason in note (5–500 characters); requires a fresh `Idempotency-Key`. Requests full opposite posting after approval. |
@@ -52,7 +60,7 @@ Errors use `{ "error": { "message": "...", "fields": { "field": ["reason"] } } }
 | GET /members/me | profile.read | Own linked profile. No arbitrary member ID. |
 | GET /members/:id | members.read OR own profile.read | Full profile, nominees, latest photo metadata and safe login metadata. |
 | PUT /members/:id | members.write | Full member input + current numeric `version`; atomic nominee replacement. Returns updated member. |
-| DELETE /members/:id | members.archive | `{version}`; soft archive + login/session disable, 204. |
+| DELETE /members/:id | members.archive | Accepts `{version}`. Closes and soft-archives the member, disables portal access, and returns 204. Requires zero posted savings and loan balances and no pending member transactions. |
 | POST /members/:id/login | users.manage | `{email,password}`; member-only role, forced initial password change, 201. |
 | POST /members/:id/photo | members.write | multipart field `photo`, max 5 MB, JPG/PNG; decodes and reencodes JPEG, strips metadata, max 20 MP; replaces old photo metadata and files; 201 `{id}`. |
 | DELETE /members/:id/photo | members.write | `{documentId}` for the currently displayed photo; removes photo metadata and files, audits removal, 204. Stale photo IDs return 409 when a newer photo exists. |
@@ -82,7 +90,7 @@ Photo changes serialize on the member row and increment its version. A failed im
 }
 ```
 
-Email may be omitted, empty or null. Status is ACTIVE, INACTIVE or SUSPENDED. Phone accepts `+`, digits, spaces, parentheses and hyphens. Nominee shares are decimal strings, each positive and ≤100 with at most two decimal places; the total must be exactly 100%. 1–10 nominees are required. PUT uses all input fields plus `version`. The server generates memberNo; clients cannot change identity, login link, photo metadata or archive timestamp through this form. Names, contact details and addresses accept Bangla and English Unicode.
+Email may be omitted, empty or null. New members can be ACTIVE, INACTIVE or SUSPENDED. PUT also accepts CLOSED for existing members once posted savings and outstanding loan principal both reach zero and all pending member transactions are resolved. Closure is permanent, disables the member portal login, and preserves financial history. GET /members accepts CLOSED as a status filter. Phone accepts `+`, digits, spaces, parentheses and hyphens. Nominee shares are decimal strings, each positive and ≤100 with at most two decimal places; the total must be exactly 100%. 1–10 nominees are required. PUT uses all input fields plus `version`. The server generates memberNo; clients cannot change identity, login link, photo metadata or archive timestamp through this form. Names, contact details and addresses accept Bangla and English Unicode.
 
 List query: `page=1&pageSize=10&search=...&status=ACTIVE&sort=createdAt&direction=desc`. pageSize: 1–100; sort: createdAt, fullName, memberNo; direction asc/desc. Result: `{items,total,page,pageSize,pages}`. An empty result has pages=0. Sorts include an ID tiebreaker. Unique email/member number conflicts return 409. Current member `version` changes on edits, photo upload, login provisioning and archival; refetch before editing after any of these operations.
 

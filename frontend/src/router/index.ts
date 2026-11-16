@@ -8,6 +8,7 @@ export const router = createRouter({ history: createWebHistory(import.meta.env.B
     { path: '', component: () => import('../views/DashboardView.vue'), meta: { permission: 'dashboard.read', title: 'Overview' } },
     { path: 'members', component: () => import('../modules/members/MemberList.vue'), meta: { permission: 'members.read', title: 'Members' } },
     { path: 'finance', component: () => import('../modules/finance/FinanceView.vue'), meta: { permission: 'finance.read', title: 'Finance' } },
+    { path: 'activity', component: () => import('../views/ActivityView.vue'), meta: { title: 'Activity log' } },
     ...['loans', 'investments', 'income', 'expenses', 'bank', 'approvals'].map(section => ({ path: section, component: () => import('../modules/finance/FinanceView.vue'), props: { section }, meta: { permission: 'finance.read', title: section.charAt(0).toUpperCase() + section.slice(1) } })),
     { path: 'members/new', redirect: { path: '/members', query: { entry: 'new' } }, meta: { permission: 'members.write' } },
     { path: 'members/:id/edit', redirect: to => ({ path: `/members/${String(to.params.id)}`, query: { entry: 'edit' } }), meta: { permission: 'members.write' } },
@@ -23,7 +24,7 @@ router.beforeEach(async to => {
   await auth.initialize();
   if (!auth.user && !to.meta.public) return '/login';
   if (auth.user?.mustChangePassword && to.path !== '/change-password') return '/change-password';
-  if (auth.user && !auth.user.societyId && auth.user.isSuperAdmin && !['/societies', '/users', '/change-password'].includes(to.path)) return '/societies';
+  if (auth.user && !auth.user.societyId && auth.user.isSuperAdmin && !['/societies', '/users', '/activity', '/change-password'].includes(to.path)) return '/societies';
   if (auth.user && to.path === '/login') return auth.isStaff ? '/' : '/my-profile';
   if (to.meta.permission && !auth.can(String(to.meta.permission))) return auth.isStaff ? '/' : '/my-profile';
 });

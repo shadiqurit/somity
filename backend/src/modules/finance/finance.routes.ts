@@ -19,8 +19,10 @@ financeRouter.post('/accounts', requirePermission('finance.settings'), controlle
 financeRouter.get('/policy', requirePermission('finance.read'), controller.policy);
 financeRouter.put('/policy', requirePermission('finance.settings'), controller.updatePolicy);
 financeRouter.get('/transactions', requirePermission('finance.read'), controller.list);
+financeRouter.get('/transaction-log', requirePermission('finance.read'), controller.transactionLog);
 financeRouter.post('/transactions', requirePermission('finance.write'), controller.submit);
 financeRouter.get('/transactions/:id', requirePermission('finance.read'), controller.get);
+financeRouter.delete('/transactions/:id', requirePermission('finance.delete'), controller.remove);
 financeRouter.post('/transactions/:id/decision', requirePermission('finance.approve'), controller.decide);
 financeRouter.post('/transactions/:id/cancel', requirePermission('finance.write'), controller.cancel);
 financeRouter.post('/transactions/:id/reversal', requirePermission('finance.write'), controller.reverse);
