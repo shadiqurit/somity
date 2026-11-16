@@ -1,10 +1,10 @@
-# Somity — Society Management, Phase 2
+# Somity
 
-Separate Vue 3 / Vite / TypeScript frontend and Express / TypeScript / MySQL 8 / Prisma backend, following `SPEC.md`. This phase delivers authentication, permissions, an admin dashboard, member CRUD with nominees/private photos, search/pagination, a read-only member dashboard, migrations and superadmin provisioning.
+Somity manages members and finances across multiple societies. It uses a Vue 3 / Vite / TypeScript frontend and an Express / TypeScript / MySQL 8 / Prisma backend. Start with the [agent handoff](docs/HANDOFF.md) for the current checkout, recent changes, code map, and verification status. [SPEC.md](SPEC.md) records the original project brief.
 
 Super Admin manages the platform and its societies. Admin can handle financial transactions in any active society. Society Admin manages members, staff and finance within the society assigned to their account. The sidebar society selector scopes business screens and APIs. See [the multi-society guide](docs/MULTI_SOCIETY.md) for setup, isolation and migration details.
 
-Phase 2 adds member deposits/withdrawals, cash and bank accounts, one- or two-person approvals, a balanced ledger, approved reversals, and private member statements. See [the Phase 2 guide](docs/PHASE2.md) for workflow, migration, permissions and tested guarantees. Loans with monthly principal installments and repayments, investments with principal/profit returns, society expenses and cash/bank transfers are now implemented; see [the financial modules guide](docs/FINANCIAL_MODULES.md). Automatic interest/profit allocation, PDF/Excel export and automated encrypted backups remain separate work. No financial records or balances are mocked.
+Finance covers member deposits and withdrawals, cash and bank accounts, one- or two-person approvals, a balanced ledger, approved reversals and private member statements. It also covers principal-only loans, investments and returns, other income, expenses, internal transfers and product dashboards. The Bank dashboard shows date-filtered combined balances and external flows alongside per-account movements. See [the Phase 2 guide](docs/PHASE2.md) and [the financial modules guide](docs/FINANCIAL_MODULES.md).
 
 ## Setup
 
@@ -35,20 +35,21 @@ frontend/src/
   components/{ui,forms,tables,modals}/  Shared accessible controls
   composables/                        Locale preparation (EN/বাংলা navigation)
   layouts/                            Responsive authenticated shell
+  modules/finance/                    Entry, approvals, ledger, reports and statements
   modules/members/                    Directory, editor and profile
   router/ stores/ services/ utils/     Guards, Pinia auth, Axios, formatters
-  views/                              Login, password, dashboard and staff
+  views/                              Login, password, overview, activity, society and staff pages
 backend/
-  prisma/schema.prisma                 Normalized Phase 1 schema
+  prisma/schema.prisma                 Identity, tenancy, member, audit and finance schema
   prisma/migrations/                   Version-controlled MySQL SQL
   prisma/seed.ts                       Roles, permissions, initial superadmin
   prisma7.config.ts                    Pinned Prisma 7 migration configuration
-  src/modules/{auth,members,users,uploads,dashboard}/
+  src/modules/                         Auth, societies, members, users, uploads, dashboard, finance and activity
   src/{config,middleware,services,utils}/
-docs/                                  API contract and future database design
+docs/                                  Agent handoff, API, accounting and deployment guides
 ```
 
-Authentication keeps access tokens in memory and refresh tokens in a private cookie. Authorization is enforced on API routes and record ownership, including photo downloads. Member archives retain records and disable login. All member mutations and successful login/password/staff events are audited; secrets are excluded. Files stay outside the public web root and are decoded/reencoded before storage. New users must change their initial password before business access. Society Admin can create staff/member logins in their own society; platform Super Admin can create and manage societies. Tenant accounts cannot create platform Super Admins. Member dashboards allow viewing their own profile and approved savings statement only.
+Authentication keeps access tokens in memory and refresh tokens in a private cookie. The API enforces tenant and ownership checks, including for photo downloads. Member closure and archival preserve history and disable portal access. Files stay outside the public web root and are validated and re-encoded before storage. Society Admin manages staff and member logins within their society. Super Admin manages societies, provisions platform Admins, and can reset passwords across societies. New and reset accounts must change their temporary password before business access. Members can view their own profile, approved savings statement and loans. Activity feeds and the financial transaction log provide scoped audit history.
 
 Reusable controls include AppForm, AppInput, AppSelect, AppDatePicker, FileUploader, AppTable (sort/pagination), AppModal, ConfirmDialog, StatusBadge, SummaryCard, LoadingState and AppButton. Most interface text is English; the locale composable includes Bangla navigation and core dashboard labels as a foundation for complete translation. Bangla input is supported throughout.
 

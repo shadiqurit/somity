@@ -9,7 +9,8 @@ The application now manages multiple societies in one MySQL database. Business r
 3. Open that society from the list or choose it using **Current society** in the sidebar.
 4. Use **Team & access → Add admin account** as Super Admin to give a user financial access to every active society. Admins choose a society from **Current society** before working on its transactions.
 5. A Society Admin uses **Team & access** to create Society Admin, Accountant or Approver accounts within their society. Member logins are created from member profiles.
-6. Every new login must change its temporary password. Members can view their own profile and approved savings statement. Approvers can read financial records and decide approval requests.
+6. Every new login must change its temporary password. Members can view their own profile, approved savings statement and loans. Approvers can read financial records and decide approval requests.
+7. Super Admin can reset a password from the global account list under **Team & access**. This revokes the account's active sessions across societies and requires a password change on the next sign-in.
 
 Only Super Admin can create, edit, enable or disable societies. Super Admin and Admin can open any active society. Society staff and members can select only societies with an active membership. Disabling a society blocks its business APIs while retaining its records. A Super Admin can reactivate it from the platform list.
 

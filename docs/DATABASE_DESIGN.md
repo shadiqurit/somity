@@ -1,10 +1,10 @@
 # Database design and upgrade plan
 
-The implemented scope now includes the [loan, investment, expense and bank modules](FINANCIAL_MODULES.md). That guide supersedes the planned-table descriptions below for these modules; financial postings continue to share transactions, entries and approval history.
+Use [schema.prisma](../backend/prisma/schema.prisma) and the committed migrations for the current schema. The [financial modules guide](FINANCIAL_MODULES.md) describes the implemented products and posting rules.
 
 ## Scope
 
-Phase 1 implements identity, permissions, members, nominees, private photos, audit history and settings. Phase 2 implements accounts, transactions, transaction_entries, approval_policies and approval_steps for member savings; see [PHASE2.md](PHASE2.md) for the current schema, invariants and scope. The broader financial tables below remain a design contract for later increments. The installation supports multiple societies with independent role assignments and society-scoped business data. See [MULTI_SOCIETY.md](MULTI_SOCIETY.md) for the implemented tenant boundary, migration and administration workflow.
+The application uses one MySQL database with separate role assignments and business data for each society. Member savings and later financial products share accounts, transactions, ledger entries and approval history. See [PHASE2.md](PHASE2.md) for the original savings increment and [MULTI_SOCIETY.md](MULTI_SOCIETY.md) for the tenant boundary and administration workflow.
 
 ## Implemented tables
 
@@ -13,17 +13,22 @@ Phase 1 implements identity, permissions, members, nominees, private photos, aud
 | societies | Independent society identity, unique code, active flag, contact details, currency/timezone and version. |
 | society_memberships | Society/user unique membership, scoped role and active flag. Composite keys constrain member login ownership. |
 | users | Global login identity, unique case-insensitive normalized email, salted scrypt hash, active flag and mandatory initial password change. |
-| roles | Five uniquely coded roles: SUPER_ADMIN, ADMIN, ACCOUNTANT, APPROVER, MEMBER. |
+| roles | Six role codes: SUPER_ADMIN, ADMIN, SOCIETY_ADMIN, ACCOUNTANT, APPROVER, MEMBER. |
 | permissions | Named API capabilities, independent of frontend navigation. |
-| user_roles | Composite primary key; reserved for platform Super Admin. Society roles are assigned through society_memberships. |
+| user_roles | Composite primary key for the platform SUPER_ADMIN and ADMIN assignments. Society roles are assigned through society_memberships. |
 | role_permissions | Composite primary key; permissions are resolved from the database on every authenticated request. |
 | refresh_sessions | SHA-256 hashes of random refresh secrets, token family, expiry and revocation. No plaintext refresh tokens in SQL. |
 | members | Durable membership identity, generated unique member number, optional society-scoped unique login link, profile, date, status, optimistic version and soft archive. |
 | nominees | One-to-many nominees; exact DECIMAL(5,2) shares. API requires 1–10 nominees and a total of exactly 100.00%. |
 | member_documents | Private storage metadata with member FK, document kind, MIME type, generated storage key, size and creation time. Phase 1 upload supports photos only. |
-| audit_logs | Actor, action, target entity, timestamp and before/after details. Passwords and tokens are excluded. Business mutation and audit insert share one transaction. |
+| audit_logs | Actor, recorded role, society, action, target, timestamp and optional event details. Business mutations and their audit records commit together. |
 | system_settings | Society/key scoped JSON configuration, seeded with BDT, Asia/Dhaka and en-BD defaults. No public write endpoint in Phase 1. |
 | file_deletions | Durable cleanup queue for superseded/removed private photo files, keyed by storage key with retry attempts. Created atomically with photo metadata deletion. |
+| accounts | Society-specific cash and bank accounts plus system ledger accounts. The account code is unique per society. |
+| transactions | Request header, captured policy, effective date, idempotency key, product links and lifecycle state. Reversals link to their original request. A deleted rejected request retains its row and sets `deletedAt`. |
+| transaction_entries | Posted debit and credit lines using DECIMAL(20,2). Composite foreign keys enforce tenant consistency. |
+| approval_policies, approval_steps | Versioned society policy and ordered, distinct approver decisions for each request. |
+| loans, investments | Terms and identity of posted loan disbursements and investment purchases. Repayment and return activity uses linked transactions and ledger entries. |
 
 ```mermaid
 erDiagram
@@ -56,7 +61,9 @@ Financial requests, approvals, rejections, postings, cancellations, reversal req
 
 The transaction log uses a `(createdAt, id)` cursor, a bounded page size, and no total count. Composite audit indexes support a society’s chronological feed, a single transaction’s history, and filtering by action. The transaction list has complementary indexes on visible rows ordered by creation time, including variants for status and type filters.
 
-## Later financial migrations
+## Original financial design proposals
+
+The following proposals predate the implemented tables above. Check the current schema and posting service when planning a migration.
 
 Use member and user IDs as foreign keys. Do not add floating-point balance columns to members. Display balances computed from the approved ledger (or transactionally maintained, reconcilable aggregates).
 

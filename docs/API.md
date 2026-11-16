@@ -2,7 +2,7 @@
 
 ## Activity log
 
-`GET /api/activity` requires `activity.read` and a selected society. `GET /api/activity/me` returns the signed-in account’s personal and selected-society events. `GET /api/activity/platform` gives Super Admin access across societies. Each feed accepts `action`, `actorRole`, `limit` (max 100), and `after` (the previous response’s `nextCursor`).
+`GET /api/activity` requires `activity.read` and a selected society. `GET /api/activity/me` returns events performed by the signed-in account in the selected society or at platform scope. `GET /api/activity/platform` gives Super Admin access across societies. Each feed accepts `action`, `actorRole`, `limit` (max 100), and `after` (the previous response’s `nextCursor`).
 
 Events show the action, actor, recorded role, target, society and time. Older audit records can have an unrecorded role. The activity endpoints return event metadata without the stored audit payload. `POST /api/auth/select-society` validates the `X-Society-Id` selection and records it as an activity event.
 
@@ -31,7 +31,8 @@ All routes below require authentication, a changed initial password and an activ
 | GET `/finance/loan-summary` | finance.read | Society-wide loan principal disbursed, repaid, and outstanding after posted reversals, plus the number of pending loan requests. |
 | GET `/finance/investment-summary` | finance.read | Society-wide principal invested, returned, and outstanding, plus realized profit after posted reversals. |
 | GET `/finance/expense-summary` | finance.read | Approved expenses, expense reversals, net expenses, and pending expense requests. Optional `from` and `to` filter by effective date. |
-| GET `/finance/bank-summary` | finance.read | Per-account movements and combined opening, incoming, outgoing, and closing totals for cash and bank accounts. Combined flows omit internal transfers and their reversals. Accepts optional `from` and `to`. |
+| GET `/finance/bank-summary` | finance.read | Returns `{items, expenses, summary: {opening, incoming, outgoing, closing}}` for cash and bank accounts. Per-account flows include internal transfers and their reversals. Combined flows omit both. Accepts optional `from` and `to`. |
+| GET `/finance/income-summary` | finance.read | Approved other income, investment profit and reversals. Accepts optional `from` and `to`. |
 | GET `/finance/statements/:memberId` | finance.read | Approved movements, opening/closing/running balances; optional from/to/page/pageSize. Archived members' financial history remains available to staff. |
 | GET `/finance/statements/me` | profile.read | Identical statement restricted to the caller's linked member. Cannot select another member. |
 
@@ -39,7 +40,7 @@ Submission keys are unique per society. Replaying the same normalized payload an
 
 ## Phase 1 endpoints
 
-Base path `/api`. Business endpoints require `X-Society-Id` for an active society the caller can access. `/auth/*` and the platform `/societies` routes do not require this header, although `/auth/me` and refresh use it to resolve the selected society. Roles/permissions and member ownership are resolved within that society on every request. Responses are JSON except authenticated document downloads. Authentication uses a 15-minute Bearer JWT kept in browser memory and a rotating 7-day opaque refresh token in a HttpOnly, SameSite=Strict cookie scoped to `/api/auth`. Production cookies require HTTPS. Auth POSTs require an `Origin` exactly matching `FRONTEND_ORIGIN`, including command-line clients. Cross-origin frontend deployments must be same-site for the strict refresh cookie; prefer a same-origin `/api` reverse proxy.
+Base path `/api`. Society business endpoints and `POST /auth/select-society` require `X-Society-Id` for an active society the caller can access. Other auth routes, platform routes and personal activity can be called without the header. Auth resolves the selected society when the header is supplied. Roles, permissions and member ownership are resolved on every request. Responses are JSON except authenticated document downloads. Authentication uses a 15-minute Bearer JWT kept in browser memory and a rotating 7-day opaque refresh token in a HttpOnly, SameSite=Strict cookie scoped to `/api/auth`. The API sets Secure on production cookies. The Windows LAN proxy rewrites the cookie path and Secure flag for its HTTP deployment as described in the [LAN guide](WINDOWS_NGINX_DEPLOYMENT.md#windows-lan-at-192168559somity). Auth POSTs require an `Origin` exactly matching `FRONTEND_ORIGIN`, including command-line clients. Cross-origin frontend deployments must be same-site for the strict refresh cookie.
 
 Errors use `{ "error": { "message": "...", "fields": { "field": ["reason"] } } }`; fields are present for validation failures. Statuses: 400 malformed JSON/current password, 401 missing/expired credentials, 403 permission/origin/temporary password, 404 absent record, 409 duplicate/stale write, 413 oversized JSON, 422 invalid input/upload, 429 throttled, 500 unexpected error. Sensitive internals are not returned.
 
@@ -50,13 +51,16 @@ Errors use `{ "error": { "message": "...", "fields": { "field": ["reason"] } } }
 | POST /auth/refresh | Refresh cookie + Origin | Rotates cookie and returns new access token/user. Reuse revokes the token family. |
 | POST /auth/logout | Origin | Revokes cookie's family and clears cookie; 204. |
 | GET /auth/me | Authenticated | Current user, roles, permissions, memberId and mustChangePassword. |
+| POST /auth/select-society | Authenticated + trusted Origin + active society | Validates the society in `X-Society-Id`, records the selection and returns the scoped user. |
 | POST /auth/password | Authenticated + Origin | `{currentPassword,newPassword}`; invalidates all sessions, clears cookie, 204. |
-| GET /dashboard | dashboard.read | Actual member counts and 5 recently added members. No fabricated financial balances. |
+| GET /dashboard | dashboard.read | Member counts and the 5 most recently added members. |
 | GET /roles | users.manage | Society role code/name pairs for `SOCIETY_ADMIN`, `ACCOUNTANT`, `APPROVER` and `MEMBER`. |
 | GET /societies?page=1&search=... | Platform Super Admin | Paginated society details, active status and member/user counts. |
 | POST /societies | Platform Super Admin | Society details plus `{admin:{name,email,password}}`. Creates the society and its first Society Admin atomically, 201. |
 | PUT /societies/:id | Platform Super Admin | Society details plus `{version,isActive}`; optimistic update; 200. |
+| GET /platform/users?page=1&search=... | Platform Super Admin | Paginated global accounts and role names. |
 | POST /platform/users | Platform Super Admin | `{name,email,password}` creates an `ADMIN` with access to every active society, 201. No society selection is required. |
+| PUT /platform/users/:id/password | Platform Super Admin | `{password}` sets a new temporary password, revokes the target user's existing sessions and records the reset. Returns 204. |
 | GET /users?page=1 | users.manage | Paginated identities, role names and status; 20 rows/page, no password hashes. |
 | POST /users | users.manage | `{name,email,password,roleCode}` creates staff, 201. Accepts `SOCIETY_ADMIN`, `ACCOUNTANT` or `APPROVER` and creates a membership in the selected society. |
 | GET /members | members.read | Searchable/paginated non-archived members. |
@@ -70,7 +74,7 @@ Errors use `{ "error": { "message": "...", "fields": { "field": ["reason"] } } }
 | DELETE /members/:id/photo | members.write | `{documentId}` for the currently displayed photo; removes photo metadata and files, audits removal, 204. Stale photo IDs return 409 when a newer photo exists. |
 | GET /documents/:id | members.read OR owning profile.read | Authenticated photo bytes; no public storage URL. |
 
-All protected business endpoints require initial password change to be complete. API-wide limiter: 300 requests per IP / minute. The initial single-process store should be replaced with a shared store for multiple replicas. Staff create/update/delete and photo operations write audit events within the same DB transaction. Refresh tokens and password hashes are never included in API responses or audit snapshots.
+All protected business endpoints require initial password change to be complete. The API-wide limiter allows 300 requests per IP per minute outside tests. The initial single-process store should be replaced with a shared store for multiple replicas. Staff provisioning and photo mutations write audit events within the same database transaction. Refresh tokens travel in the session cookie. Response bodies and audit snapshots exclude refresh tokens and password hashes.
 
 Photo changes serialize on the member row and increment its version. A failed image validation leaves the current photo intact. Replacement commits the new photo, old metadata deletion, audit event and file-cleanup jobs together; old bytes are deleted only after commit. Removal is harmless to retry when no photo remains and never deletes other document kinds. Physical deletion is attempted before returning; failures remain queued in `file_deletions` and retry at API startup and every minute. The cleanup migration also queues legacy superseded photos while retaining the latest one per member. In the edit modal, removal waits for Save; Cancel and Keep current photo preserve the existing image.
 
@@ -94,7 +98,7 @@ Photo changes serialize on the member row and increment its version. A failed im
 }
 ```
 
-Email may be omitted, empty or null. New members can be ACTIVE, INACTIVE or SUSPENDED. PUT also accepts CLOSED for existing members once posted savings and outstanding loan principal both reach zero and all pending member transactions are resolved. Closure is permanent, disables the member portal login, and preserves financial history. GET /members accepts CLOSED as a status filter. Phone accepts `+`, digits, spaces, parentheses and hyphens. Nominee shares are decimal strings, each positive and ≤100 with at most two decimal places; the total must be exactly 100%. 1–10 nominees are required. PUT uses all input fields plus `version`. The server generates memberNo; clients cannot change identity, login link, photo metadata or archive timestamp through this form. Names, contact details and addresses accept Bangla and English Unicode.
+Email may be omitted, empty or null. Members accept optional `identityNumber` (40 characters), `nationality` (120), `dateOfBirth` (ISO date) and `permanentAddress` (500). Nominees accept optional `identityNumber` (40). New members can be ACTIVE, INACTIVE or SUSPENDED. PUT also accepts CLOSED for existing members once posted savings and outstanding loan principal both reach zero and all pending member transactions are resolved. Closure is permanent, disables the member portal login, and preserves financial history. GET /members accepts CLOSED as a status filter. Phone accepts `+`, digits, spaces, parentheses and hyphens. Nominee shares are positive decimal strings up to 100, with a maximum of two decimal places and an exact total of 100%. The request requires 1–10 nominees. PUT uses the full member input plus `version`. The server assigns memberNo and manages login links, photo metadata and archive timestamps. Names, contact details and addresses accept Bangla and English Unicode.
 
 List query: `page=1&pageSize=10&search=...&status=ACTIVE&sort=createdAt&direction=desc`. pageSize: 1–100; sort: createdAt, fullName, memberNo; direction asc/desc. Result: `{items,total,page,pageSize,pages}`. An empty result has pages=0. Sorts include an ID tiebreaker. Unique email/member number conflicts return 409. Current member `version` changes on edits, photo upload, login provisioning and archival; refetch before editing after any of these operations.
 
@@ -103,12 +107,13 @@ List query: `page=1&pageSize=10&search=...&status=ACTIVE&sort=createdAt&directio
 | Role | Dashboard | All profiles | Edit/create | Archive | Staff/member logins | Own profile |
 | --- | --- | --- | --- | --- | --- | --- |
 | Super Admin | Yes | Yes | Yes | Yes | Yes | If linked |
-| Admin | Yes | Yes | Yes | Yes | Yes | No |
+| Admin | Yes | Yes | No | No | No | No |
+| Society Admin | Yes | Yes | Yes | Yes | Yes | No |
 | Accountant | Yes | Yes | No | No | No | No |
 | Approver | Yes | Yes | No | No | No | No |
 | Member | No | No | No | No | No | Yes |
 
-Accountant can read finance and submit requests. Approver can read finance and approve/reject requests. Admin and Super Admin also manage accounts and approval policy. Members can read only their own statement. No public registration or browser-selected role assignment exists. Superadmin manages societies and creates each society’s first Admin. Tenant Admin and Superadmin can create staff and member logins within the selected society; only the seed creates the initial platform Superadmin. New accounts must change temporary passwords before accessing business data.
+Accountant can read finance and submit requests. Approver can read finance and approve or reject requests. Super Admin, Admin and Society Admin can manage accounts and approval policy. Members can read their own statement and loans. Super Admin manages societies and provisions each society’s first Society Admin. Society Admin and Super Admin can create staff and member logins within the selected society. The seed provisions the initial platform Super Admin. New accounts must change temporary passwords before accessing business data.
 
 ## Multiple-society contract
 

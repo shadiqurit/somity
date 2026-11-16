@@ -12,7 +12,7 @@ The requested modules are available on the existing MySQL server configured in `
 | Investment | Approved purchase with title/counterparty; return entry explicitly splits principal returned and realized profit; outstanding principal and profit/history. |
 | Income | Other income with an optional note, investment profit receipts, and net approved income for the selected period. |
 | Expense | Expense category, payee, amount, date/reference/note, approval, history, reversal and net cost for the selected period. |
-| Bank | Cash/bank account setup, approved transfers, and date-filtered opening/deposit/withdrawal/closing summaries per account. |
+| Bank | Cash/bank account setup, approved transfers, date-filtered per-account movements, and combined opening, incoming, outgoing and closing cards. |
 | Approval | Maker submits → distinct Approver decides → final approval posts balanced ledger lines. Existing configurable one/two-approver policy and immutable policy snapshots apply to every transaction type. |
 
 ## Entering transactions
@@ -24,6 +24,8 @@ Open **New transaction** from the sidebar section for the transaction you want t
 In **Income**, choose **Other income** for receipts such as shop rent. Enter the receiving account, date and amount, and describe the receipt in the optional note. Choose **Investment profit** to link a profit-only receipt to a recorded investment. The Income page shows the profit portion of investment returns and includes approved reversals in its date-filtered totals.
 
 Member savings are separate from loan principal: borrowing and repaying a loan does not alter the member's savings liability. Member logins see their own savings statement and **My loans** under **My dashboard**. Staff can also open loans under a member profile. Bank summaries include all posted cash movements, not only member deposits/withdrawals.
+
+The Bank dashboard combines cash and bank accounts. Its incoming and outgoing totals exclude internal transfers and their reversals, while each account row includes its own transfer movements. For a selected period, combined opening plus incoming minus outgoing equals closing.
 
 ## Explicit calculation rules
 
@@ -54,7 +56,7 @@ All entries require cashAccountId, amount and effectiveDate; reference/note are 
 
 Use `GET /finance/income-summary` with optional `from` and `to` dates for approved income totals. Use `GET /finance/transactions?scope=income` for income requests and reversals.
 
-Admin/Super Admin manage accounts/policy and may submit/decide requests; Accountant submits; Approver decides; Member only reads their own account. Decisions must also satisfy the policy's maker separation and distinct approver rules.
+Super Admin, Admin and Society Admin can manage accounts and policy, submit requests and record decisions within their authorized society. Accountant submits and Approver decides. Members can read their own statement and loans. Decisions must satisfy the captured policy's maker separation and distinct approver rules.
 
 ## Upgrade and verification
 

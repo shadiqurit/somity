@@ -1,5 +1,7 @@
 # Society Management System — Development Prompt
 
+This is the original development brief. For implemented features and the current checkout, see the [agent handoff](docs/HANDOFF.md).
+
 Build a modern, simple, secure, and scalable **Society Management System** for managing members, deposits, withdrawals, loans, investments, profits, expenses, and financial reports.
 
 ## 1. Technology Stack
