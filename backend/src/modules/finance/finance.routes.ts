@@ -9,6 +9,7 @@ financeRouter.get('/loans/:id', requirePermission('finance.read'), controller.lo
 financeRouter.get('/investments', requirePermission('finance.read'), controller.investments);
 financeRouter.get('/investments/:id', requirePermission('finance.read'), controller.investments);
 financeRouter.get('/bank-summary', requirePermission('finance.read'), controller.bankSummary);
+financeRouter.get('/income-summary', requirePermission('finance.read'), controller.incomeSummary);
 financeRouter.get('/statements/me', requirePermission('profile.read'), controller.ownStatement);
 financeRouter.get('/statements/:memberId', requirePermission('finance.read'), controller.statement);
 financeRouter.get('/summary', requirePermission('finance.read'), controller.summary);

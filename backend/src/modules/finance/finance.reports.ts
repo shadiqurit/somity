@@ -6,10 +6,10 @@ import { todayDhaka, type FinanceListInput } from './finance.validator.js';
 type Tx = Prisma.TransactionClient;
 const zero = () => new Prisma.Decimal(0);
 const range = (input: { from?: string; to?: string }) => ({ ...(input.from ? { gte: new Date(input.from) } : {}), ...(input.to ? { lte: new Date(input.to) } : {}) });
-async function productBalance(tx: Tx, societyId: string, kind: 'LOAN_RECEIVABLE' | 'INVESTMENT_ASSET' | 'INVESTMENT_INCOME', scope: Prisma.FinancialTransactionWhereInput) {
+async function productBalance(tx: Tx, societyId: string, kind: 'LOAN_RECEIVABLE' | 'INVESTMENT_ASSET' | 'INVESTMENT_INCOME' | 'OTHER_INCOME', scope: Prisma.FinancialTransactionWhereInput) {
   const totals = await tx.ledgerEntry.aggregate({ where: { societyId, account: { kind }, transaction: { ...scope, status: 'POSTED' } }, _sum: { debit: true, credit: true } });
   const debit = totals._sum.debit ?? zero(); const credit = totals._sum.credit ?? zero();
-  return kind === 'INVESTMENT_INCOME' ? credit.minus(debit) : debit.minus(credit);
+  return kind === 'INVESTMENT_INCOME' || kind === 'OTHER_INCOME' ? credit.minus(debit) : debit.minus(credit);
 }
 export async function loans(societyId: string, input: FinanceListInput, ownMemberId?: string, detailId?: string) {
   return db.$transaction(async tx => {
@@ -61,5 +61,18 @@ export async function bankSummary(societyId: string, input: { from?: string; to?
     }));
     const expenses = await tx.ledgerEntry.aggregate({ where: { societyId, account: { kind: 'EXPENSE' }, transaction: { status: 'POSTED', effectiveDate: range(input) } }, _sum: { debit: true, credit: true } });
     return { items, expenses: (expenses._sum.debit ?? zero()).minus(expenses._sum.credit ?? zero()).toFixed(2) };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+export async function incomeSummary(societyId: string, input: { from?: string; to?: string }) {
+  return db.$transaction(async tx => {
+    const scope = { effectiveDate: range(input) };
+    const otherIncome = await productBalance(tx, societyId, 'OTHER_INCOME', scope);
+    const investmentProfit = await productBalance(tx, societyId, 'INVESTMENT_INCOME', scope);
+    return {
+      otherIncome: otherIncome.toFixed(2),
+      investmentProfit: investmentProfit.toFixed(2),
+      total: otherIncome.plus(investmentProfit).toFixed(2),
+    };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }

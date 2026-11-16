@@ -7,6 +7,7 @@ const zero = () => new Prisma.Decimal(0);
 const systemAccounts = {
   MEMBER_SAVINGS: ['MEMBER-SAVINGS', 'Member savings'], LOAN_RECEIVABLE: ['SYS-LOANS', 'Member loans receivable'],
   INVESTMENT_ASSET: ['SYS-INVESTMENTS', 'Investments'], INVESTMENT_INCOME: ['SYS-PROFIT', 'Investment profit'], EXPENSE: ['SYS-EXPENSE', 'Society expenses'],
+  OTHER_INCOME: ['SYS_INCOME', 'Other income'],
 } as const;
 export async function systemAccount(tx: Tx, societyId: string, kind: keyof typeof systemAccounts) {
   const [code, name] = systemAccounts[kind];
@@ -57,6 +58,7 @@ export async function productLines(tx: Tx, item: FinancialTransaction) {
     incoming(item.cashAccountId);
     add(await system('INVESTMENT_ASSET'), zero(), principal); add(await system('INVESTMENT_INCOME'), zero(), profit);
   } else if (item.type === 'EXPENSE') { incoming(await system('EXPENSE')); out(item.cashAccountId); }
+  else if (item.type === 'OTHER_INCOME') { incoming(item.cashAccountId); out(await system('OTHER_INCOME')); }
   else if (item.type === 'TRANSFER') { incoming(details.destinationAccountId!); out(item.cashAccountId); }
   else throw new AppError(422, 'Unsupported transaction type');
   if (lines.length < 2 || !lines.reduce((sum, line) => sum.plus(line.debit).minus(line.credit), zero()).isZero()) throw new Error('Unbalanced posting');

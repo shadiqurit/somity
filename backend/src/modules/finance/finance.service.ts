@@ -14,6 +14,7 @@ const money = (value: Prisma.Decimal | null | undefined) => (value ?? zero()).to
 const detailInclude = {
   member: { select: { id: true, fullName: true, memberNo: true } },
   cashAccount: { select: { id: true, name: true, kind: true } },
+  investment: { select: { title: true } },
   createdBy: { select: { id: true, name: true } },
   decisions: { orderBy: { step: 'asc' as const }, include: { approver: { select: { id: true, name: true } } } },
   reversalOf: { select: { id: true, transactionNo: true, type: true } },
@@ -63,12 +64,24 @@ export async function accounts(societyId: string) {
     return Promise.all(items.map(async account => {
       const totals = await tx.ledgerEntry.aggregate({ where: { societyId, accountId: account.id, transaction: { status: 'POSTED' } }, _sum: { debit: true, credit: true } });
       const debit = totals._sum.debit ?? zero(); const credit = totals._sum.credit ?? zero();
-      return { ...account, balance: money(['MEMBER_SAVINGS', 'INVESTMENT_INCOME'].includes(account.kind) ? credit.minus(debit) : debit.minus(credit)) };
+      return { ...account, balance: money(['MEMBER_SAVINGS', 'INVESTMENT_INCOME', 'OTHER_INCOME'].includes(account.kind) ? credit.minus(debit) : debit.minus(credit)) };
     }));
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 export async function list(societyId: string, input: FinanceListInput) {
   const where: Prisma.FinancialTransactionWhereInput = { societyId, ...(input.status ? { status: input.status } : {}), ...(input.type ? { type: input.type } : {}), ...(input.memberId ? { memberId: input.memberId } : {}), effectiveDate: dateRange(input) };
+  if (input.scope === 'income') {
+    const income: Prisma.FinancialTransactionWhereInput = {
+      OR: [
+        { type: 'OTHER_INCOME' },
+        {
+          type: 'INVESTMENT_RETURN',
+          NOT: ['0', '0.0', '0.00'].map(equals => ({ details: { path: '$.profit', equals } })),
+        },
+      ],
+    };
+    where.OR = [income, { type: 'REVERSAL', reversalOf: { is: income } }];
+  }
   const [items, total] = await db.$transaction([
     db.financialTransaction.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (input.page - 1) * input.pageSize, take: input.pageSize, include: detailInclude }),
     db.financialTransaction.count({ where }),

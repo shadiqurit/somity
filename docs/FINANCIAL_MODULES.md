@@ -10,6 +10,7 @@ The requested modules are available on the existing MySQL server configured in `
 | Deposit/Withdraw | Entry requests, history, exact BDT amounts, date filters, approvals and approved reversals. |
 | Loan | Approved disbursement, principal, monthly installment count/date, repayment requests, outstanding principal, paid/overdue schedule and history. |
 | Investment | Approved purchase with title/counterparty; return entry explicitly splits principal returned and realized profit; outstanding principal and profit/history. |
+| Income | Other income with an optional note, investment profit receipts, and net approved income for the selected period. |
 | Expense | Expense category, payee, amount, date/reference/note, approval, history, reversal and net cost for the selected period. |
 | Bank | Cash/bank account setup, approved transfers, and date-filtered opening/deposit/withdrawal/closing summaries per account. |
 | Approval | Maker submits → distinct Approver decides → final approval posts balanced ledger lines. Existing configurable one/two-approver policy and immutable policy snapshots apply to every transaction type. |
@@ -18,7 +19,9 @@ The requested modules are available on the existing MySQL server configured in `
 
 Admin first adds cash/bank accounts from **Finance → Cash & bank accounts**. Set up an Approver under **Team & access**. Accounts begin at zero; record real deposits before disbursing loans, investing, paying expenses or transferring funds. The default policy prevents the maker from approving their own request.
 
-Use the **Loans**, **Investments**, **Expenses**, **Bank** and **Approvals** sidebar screens. **New transaction** also exposes every supported entry type. New loan/investment records are created only after final approval. Their pending requests remain in Finance history/Approvals. Use **Repay**, **Record return** or **View history** on the corresponding list row. Approval detail shows captured loan terms, investment return split and expense details before a decision is made.
+Open **New transaction** from the sidebar section for the transaction you want to record. Use **Finance** for deposits and withdrawals, **Loans** for disbursements and repayments, **Investments** for purchases and returns, **Income** for other income and investment profit, **Expenses** for expenses, and **Bank** for transfers. Use **Approvals** to review pending requests. Loan and investment records appear after final approval.
+
+In **Income**, choose **Other income** for receipts such as shop rent. Enter the receiving account, date and amount, and describe the receipt in the optional note. Choose **Investment profit** to link a profit-only receipt to a recorded investment. The Income page shows the profit portion of investment returns and includes approved reversals in its date-filtered totals.
 
 Member savings are separate from loan principal: borrowing and repaying a loan does not alter the member's savings liability. Member logins see their own savings statement and **My loans** under **My dashboard**. Staff can also open loans under a member profile. Bank summaries include all posted cash movements, not only member deposits/withdrawals.
 
@@ -33,7 +36,7 @@ Member savings are separate from loan principal: borrowing and repaying a loan d
 
 ## Accounting and API
 
-New account kinds are LOAN_RECEIVABLE (asset), INVESTMENT_ASSET (asset), INVESTMENT_INCOME (income), and EXPENSE. The system reserves their `SYS-*` account codes. Loans and investments use composite society foreign keys. Generic transaction/entry member IDs are nullable for society expenses, investments and transfers; member ownership remains mandatory for savings and loan actions in validation/posting. Product terms are captured with the immutable proposed transaction payload.
+System accounts include LOAN_RECEIVABLE and INVESTMENT_ASSET (assets), INVESTMENT_INCOME and OTHER_INCOME (income), and EXPENSE. Loans and investments use composite society foreign keys. Society income, expenses, investments and transfers can post without a member. Savings and loan transactions require a member. Product terms are captured with the immutable proposed transaction payload.
 
 All operations reuse `POST /api/finance/transactions`, `Idempotency-Key`, decision, cancellation and reversal routes. Additional entry fields:
 
@@ -43,16 +46,21 @@ All operations reuse `POST /api/finance/transactions`, `Idempotency-Key`, decisi
 | LOAN_REPAYMENT | loanId (member is resolved from the loan) |
 | INVESTMENT_PURCHASE | title, counterparty |
 | INVESTMENT_RETURN | investmentId, principalReturned, profit |
+| OTHER_INCOME | — |
 | EXPENSE | category, payee |
 | TRANSFER | destinationAccountId (different active account in the same society) |
 
 All entries require cashAccountId, amount and effectiveDate; reference/note are optional. Staff reports require `finance.read`: `GET /finance/loans`, `/finance/loans/:id`, `/finance/investments`, `/finance/investments/:id`, `/finance/bank-summary`. List routes use page/pageSize; loans can filter memberId. Bank summary accepts from/to. Members use `/finance/loans/me` and `/finance/loans/me/:id`, scoped to their linked member irrespective of supplied query filters. All routes require authentication and an active `X-Society-Id`.
+
+Use `GET /finance/income-summary` with optional `from` and `to` dates for approved income totals. Use `GET /finance/transactions?scope=income` for income requests and reversals.
 
 Admin/Super Admin manage accounts/policy and may submit/decide requests; Accountant submits; Approver decides; Member only reads their own account. Decisions must also satisfy the policy's maker separation and distinct approver rules.
 
 ## Upgrade and verification
 
 Migration `202611110001_financial_products` adds loans/investments, transaction metadata/links and account/transaction enum values, and makes member references nullable for society transactions. Existing deposits, withdrawals, decisions and ledger rows remain intact. Back up SQL and uploads before `npm run db:generate` and `npm run db:migrate`. This workspace's pre-upgrade backup is `backups/somity-before-financial-products-2026-11-11/`.
+
+Migration `202611160001_other_income` adds the transaction and ledger account types for other income.
 
 Unit tests verify month-end scheduling and exact installment sums. MySQL tests exercise principal/profit posting, concurrent repayment limits, insufficient funds, reversals, member/tenant isolation, net expenses and bank reconciliation. Browser tests cover entry → independent approver → reports, private member loan views and mobile layout, plus previous member/society workflows. Browser fixtures only use `somity_test`, and are removed afterward. The general API test budget is higher only for NODE_ENV=test; development/production retain 300 requests per minute.
 

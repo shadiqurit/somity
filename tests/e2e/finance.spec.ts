@@ -58,6 +58,7 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await signOut(page); await signIn(page, 'ACCOUNTANT'); await page.getByRole('link', { name: 'Finance', exact: true }).click();
   await page.getByRole('button', { name: 'New transaction', exact: true }).click();
   const entry = page.getByRole('dialog', { name: 'New transaction', exact: true });
+  await expect(entry.getByLabel('Transaction type').locator('option')).toHaveText(['Deposit', 'Withdrawal']);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath('finance-entry-mobile.png'), fullPage: true, animations: 'disabled' });
   const entryBounds = await entry.boundingBox(); expect(entryBounds!.width).toBeLessThanOrEqual(390);
@@ -85,10 +86,17 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await page.setViewportSize({width:1280,height:720}); await signOut(page); await signIn(page,'ACCOUNTANT');
   const approverContext = await browser.newContext(); const approverPage = await approverContext.newPage(); await signIn(approverPage,'APPROVER');
   const cash = await db.ledgerAccount.findFirstOrThrow({where:{societyId,code:'CASH-01'}});
-  async function submitProduct(type:string, amount:string, fill:(dialog:ReturnType<typeof page.getByRole>)=>Promise<void>) {
-    await page.goto('/finance'); await page.getByRole('button',{name:'New transaction',exact:true}).click(); const dialog=page.getByRole('dialog',{name:'New transaction',exact:true});
+  const optionsByMenu = {
+    loans: ['Loan disbursement', 'Loan repayment'],
+    investments: ['Investment purchase', 'Investment return'],
+    expenses: ['Expense'],
+    income: ['Other income', 'Investment profit'],
+  };
+  async function submitProduct(menu: keyof typeof optionsByMenu, type:string, amount:string, fill:(dialog:ReturnType<typeof page.getByRole>)=>Promise<void>) {
+    await page.goto(`/${menu}`); await page.getByRole('button',{name:'New transaction',exact:true}).click(); const dialog=page.getByRole('dialog',{name:'New transaction',exact:true});
+    await expect(dialog.getByLabel('Transaction type').locator('option')).toHaveText(optionsByMenu[menu]);
     await dialog.getByLabel('Transaction type',{exact:true}).selectOption(type); await dialog.getByLabel('Cash or bank account',{exact:true}).selectOption(cash.id);
-    await fill(dialog); if(type!=='INVESTMENT_RETURN')await dialog.getByLabel('Amount (BDT)').fill(amount);
+    await fill(dialog); if(type !== 'INVESTMENT_RETURN' || menu === 'income') await dialog.getByLabel('Amount (BDT)').fill(amount);
     await dialog.getByRole('button',{name:'Submit for approval',exact:true}).click(); await expect(dialog).not.toBeVisible();
     const request=await db.financialTransaction.findFirstOrThrow({where:{societyId,type:type as any,status:'PENDING'},orderBy:{createdAt:'desc'}});
     await approverPage.goto('/approvals'); const row=approverPage.getByRole('row').filter({hasText:request.transactionNo}); await row.getByRole('button',{name:'Review',exact:true}).click();
@@ -96,18 +104,44 @@ test('cash account, deposit request, approval, ledger and private member stateme
     await review.getByRole('button',{name:'Close dialog',exact:true}).click();
     return db.financialTransaction.findUniqueOrThrow({where:{id:request.id}});
   }
-  const loanRequest=await submitProduct('LOAN_DISBURSEMENT','120.01',async dialog=>{await dialog.getByLabel('Member',{exact:true}).selectOption(memberId);await dialog.getByLabel('Number of monthly installments').fill('3');await dialog.getByLabel('First installment date').fill('2027-01-31');});
+  const loanRequest=await submitProduct('loans','LOAN_DISBURSEMENT','120.01',async dialog=>{await dialog.getByLabel('Member',{exact:true}).selectOption(memberId);await dialog.getByLabel('Number of monthly installments').fill('3');await dialog.getByLabel('First installment date').fill('2027-01-31');});
   await page.goto('/loans'); await expect(page.getByRole('cell',{name:'৳ 120.01',exact:true}).first()).toBeVisible();await page.getByRole('button',{name:'View history',exact:true}).click();
   const schedule=page.getByRole('dialog',{name:'Loan schedule & history'}); await expect(schedule.getByRole('cell',{name:'2027-02-28',exact:true})).toBeVisible();await schedule.getByRole('button',{name:'Close dialog',exact:true}).click();
-  await submitProduct('LOAN_REPAYMENT','40.00',async dialog=>{await dialog.getByLabel('Loan',{exact:true}).selectOption(loanRequest.loanId!);});
-  const purchased=await submitProduct('INVESTMENT_PURCHASE','200',async dialog=>{await dialog.getByLabel('Investment title').fill('Community business');await dialog.getByLabel('Counterparty',{exact:true}).fill('Business partner');});
-  await submitProduct('INVESTMENT_RETURN','60',async dialog=>{await dialog.getByLabel('Investment',{exact:true}).selectOption(purchased.investmentId!);await dialog.getByLabel('Principal returned (BDT)').fill('50');await dialog.getByLabel('Profit received (BDT)').fill('10');});
+  await submitProduct('loans','LOAN_REPAYMENT','40.00',async dialog=>{await dialog.getByLabel('Loan',{exact:true}).selectOption(loanRequest.loanId!);});
+  const purchased=await submitProduct('investments','INVESTMENT_PURCHASE','200',async dialog=>{await dialog.getByLabel('Investment title').fill('Community business');await dialog.getByLabel('Counterparty',{exact:true}).fill('Business partner');});
+  await submitProduct('investments','INVESTMENT_RETURN','60',async dialog=>{await dialog.getByLabel('Investment',{exact:true}).selectOption(purchased.investmentId!);await dialog.getByLabel('Principal returned (BDT)').fill('50');await dialog.getByLabel('Profit received (BDT)').fill('10');});
   await page.goto('/investments'); await expect(page.getByRole('cell',{name:'৳ 150.00',exact:true})).toBeVisible();await expect(page.getByRole('cell',{name:'৳ 10.00',exact:true})).toBeVisible();
   await page.screenshot({path:testInfo.outputPath('investments-desktop.png'),fullPage:true});
-  await submitProduct('EXPENSE','25',async dialog=>{await dialog.getByLabel('Expense category').fill('Office');await dialog.getByLabel('Payee',{exact:true}).fill('Stationery supplier');});
+  await submitProduct('expenses','EXPENSE','25',async dialog=>{await dialog.getByLabel('Expense category').fill('Office');await dialog.getByLabel('Payee',{exact:true}).fill('Stationery supplier');});
   await page.goto('/expenses'); await expect(page.getByText('Net approved expenses in this period: ৳ 25.00')).toBeVisible();
   await page.goto('/bank');await expect(page.getByRole('cell',{name:'৳ 1,255.24',exact:true})).toBeVisible();
   await page.screenshot({path:testInfo.outputPath('bank-summary-desktop.png'),fullPage:true});
+  await page.getByRole('button', { name: 'Transfer funds', exact: true }).click();
+  const transfer = page.getByRole('dialog', { name: 'New transaction', exact: true });
+  await expect(transfer.getByLabel('Transaction type').locator('option')).toHaveText(['Transfer']);
+  await transfer.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await submitProduct('income', 'OTHER_INCOME', '32.50', async dialog => {
+    await expect(dialog.getByLabel('Member', { exact: true })).toHaveCount(0);
+    await expect(dialog.getByLabel('Receipt / reference (optional)')).toHaveCount(0);
+    await dialog.getByLabel('Note (optional)').fill('November shop rent');
+  });
+  await submitProduct('income', 'INVESTMENT_RETURN', '7.50', async dialog => {
+    await expect(dialog.getByLabel('Principal returned (BDT)')).toHaveCount(0);
+    await dialog.getByLabel('Investment', { exact: true }).selectOption(purchased.investmentId!);
+  });
+  await expect(page.getByRole('link', { name: 'Income', exact: true })).toHaveAttribute('href', '/income');
+  await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
+  const income = page.getByRole('region', { name: 'Approved income in the selected period' });
+  await expect(income.getByText('৳ 50.00', { exact: true })).toBeVisible();
+  await expect(income.getByText('৳ 17.50', { exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'November shop rent' })).toBeVisible();
+  await expect(page.getByRole('cell', { name: '৳ 60.00', exact: true })).toHaveCount(0);
+  const mixedReturn = page.getByRole('row').filter({ has: page.getByRole('cell', { name: '৳ 10.00', exact: true }) });
+  await mixedReturn.getByRole('button', { name: 'Review', exact: true }).click();
+  const incomeDetails = page.getByRole('dialog');
+  await expect(incomeDetails.getByRole('heading', { name: '৳ 10.00', exact: true })).toBeVisible();
+  await expect(incomeDetails.getByRole('definition').filter({ hasText: '৳ 60.00' })).toBeVisible();
+  await incomeDetails.getByRole('button', { name: 'Close dialog', exact: true }).click();
   await signOut(page);await signIn(page,'MEMBER');await expect(page.getByRole('cell',{name:'৳ 80.01',exact:true})).toBeVisible();
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('member-loans-mobile.png'),fullPage:true,animations:'disabled'});
   await approverContext.close();

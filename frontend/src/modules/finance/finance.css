@@ -25,6 +25,7 @@
 .profile-grid ~ .product-report { margin-top: 26px; }
 .product-history-heading { margin: 24px 0 14px; }
 .statement-summary { padding: 0 20px; }
+@media (min-width: 641px) { .income-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .badge.pending { color: #936d29; background: #fff5df; }
 .badge.posted { color: #367651; background: #eaf5ed; }
 .badge.rejected { color: #ab4c43; background: #fff0ee; }

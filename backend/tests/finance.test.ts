@@ -237,4 +237,53 @@ describe('Phase 2 financial workflow', () => {
     expect((await request(app).get(`/api/finance/investments/${investmentId}`).set(headers('ADMIN')).expect(200)).body.status).toBe('CANCELLED');
     const afterPeriod=await request(app).get('/api/finance/bank-summary').query({from:'2026-11-10'}).set(headers('ADMIN')).expect(200);expect(afterPeriod.body.items.every((r:{opening:string;closing:string;deposits:string;withdrawals:string})=>r.opening===r.closing&&r.deposits==='0.00'&&r.withdrawals==='0.00')).toBe(true);
   });
+  it('reports other income and investment profit by date, including approved reversals', async () => {
+    const totals = async (from = '2026-11-10', to?: string) =>
+      (await request(app).get('/api/finance/income-summary').set(headers('ADMIN')).query({ from, ...(to ? { to } : {}) }).expect(200)).body;
+    const send = (data: Record<string, unknown>) =>
+      request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+        .send({ effectiveDate: '2026-11-10', cashAccountId: cashId, ...data }).expect(201);
+    const funds = await send({ type: 'DEPOSIT', amount: '100', memberId });
+    expect((await approve(funds.body.id)).status).toBe(200);
+    const openingSavings = await balance();
+    const other = await send({ type: 'OTHER_INCOME', amount: '50.75', note: 'November shop rent' });
+    expect(other.body.member).toBeNull();
+    expect(other.body.note).toBe('November shop rent');
+    expect(await totals()).toEqual({ otherIncome: '0.00', investmentProfit: '0.00', total: '0.00' });
+    const posted = await approve(other.body.id);
+    expect(posted.status).toBe(200);
+    expect(posted.body.entries).toMatchObject([
+      { account: { code: 'CASH-01' }, debit: '50.75', credit: '0' },
+      { account: { name: 'Other income' }, debit: '0', credit: '50.75' },
+    ]);
+    const purchase = await send({ type: 'INVESTMENT_PURCHASE', amount: '40', title: 'Term deposit', counterparty: 'Test bank' });
+    const approvedPurchase = await approve(purchase.body.id);
+    expect(approvedPurchase.status).toBe(200);
+    const investmentId = approvedPurchase.body.investmentId;
+    const principalOnly = await send({ type: 'INVESTMENT_RETURN', investmentId, amount: '3', principalReturned: '3', profit: '0.0' });
+    expect((await approve(principalOnly.body.id)).status).toBe(200);
+    const combinedReturn = await send({ type: 'INVESTMENT_RETURN', investmentId, amount: '22.25', principalReturned: '20', profit: '2.25' });
+    expect((await approve(combinedReturn.body.id)).status).toBe(200);
+    expect(await totals()).toEqual({ otherIncome: '50.75', investmentProfit: '2.25', total: '53.00' });
+
+    const reversal = await request(app).post(`/api/finance/transactions/${other.body.id}/reversal`)
+      .set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+      .send({ effectiveDate: '2026-11-11', note: 'Duplicate rent receipt' }).expect(201);
+    expect((await approve(reversal.body.id)).status).toBe(200);
+    expect(await totals('2026-11-10', '2026-11-10')).toEqual({ otherIncome: '50.75', investmentProfit: '2.25', total: '53.00' });
+    expect(await totals('2026-11-11')).toEqual({ otherIncome: '-50.75', investmentProfit: '0.00', total: '-50.75' });
+    expect(await totals()).toEqual({ otherIncome: '0.00', investmentProfit: '2.25', total: '2.25' });
+
+    const history = await request(app).get('/api/finance/transactions').set(headers('ADMIN')).query({ scope: 'income', from: '2026-11-10' }).expect(200);
+    expect(history.body.total).toBe(3);
+    expect(history.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: other.body.id, note: 'November shop rent' }),
+      expect.objectContaining({ id: combinedReturn.body.id, investment: { title: 'Term deposit' }, details: expect.objectContaining({ profit: '2.25' }) }),
+      expect.objectContaining({ id: reversal.body.id, reversalOf: expect.objectContaining({ id: other.body.id }) }),
+    ]));
+    expect(await balance()).toBe(openingSavings);
+    const otherTenant = await request(app).get('/api/finance/income-summary').set(headers('ADMIN', otherSocietyId)).expect(200);
+    expect(otherTenant.body.total).toBe('0.00');
+    await request(app).get('/api/finance/income-summary').set(headers('MEMBER')).expect(403);
+  });
 });

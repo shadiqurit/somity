@@ -256,6 +256,7 @@ enum AccountKind {
   INVESTMENT_ASSET
   INVESTMENT_INCOME
   EXPENSE
+  OTHER_INCOME
 }
 
 enum FinancialTransactionType {
@@ -268,6 +269,7 @@ enum FinancialTransactionType {
   INVESTMENT_RETURN
   EXPENSE
   TRANSFER
+  OTHER_INCOME
 }
 
 enum FinancialTransactionStatus {

@@ -9,6 +9,7 @@ const links = computed(() => [
   { to: '/finance', label: 'Finance', icon: Wallet, permission: 'finance.read' },
   { to: '/loans', label: 'Loans', icon: Wallet, permission: 'finance.read' },
   { to: '/investments', label: 'Investments', icon: Building2, permission: 'finance.read' },
+  { to: '/income', label: 'Income', icon: Wallet, permission: 'finance.read' },
   { to: '/expenses', label: 'Expenses', icon: Wallet, permission: 'finance.read' },
   { to: '/bank', label: 'Bank', icon: Building2, permission: 'finance.read' },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck, permission: 'finance.approve' },

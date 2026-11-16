@@ -29,4 +29,5 @@ export const ownLoans: RequestHandler = async (req, res) => {
 };
 export const investments: RequestHandler = async (req, res) => { res.json(await reports.investments(req.societyId, listSchema.parse(req.query), req.params.id ? id(req.params.id) : undefined)); };
 export const bankSummary: RequestHandler = async (req, res) => { res.json(await reports.bankSummary(req.societyId, dateRangeSchema.parse(req.query))); };
+export const incomeSummary: RequestHandler = async (req, res) => { res.json(await reports.incomeSummary(req.societyId, dateRangeSchema.parse(req.query))); };
 
