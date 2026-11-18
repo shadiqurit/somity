@@ -81,6 +81,7 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await signOut(page); await signIn(page, 'MEMBER');
   const statement = page.locator('.finance-statement'); await expect(statement.getByText('৳ 1,500.25', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('link', { name: 'Finance', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Reports', exact: true })).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath('member-statement-mobile.png'), fullPage: true, animations: 'disabled' });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -179,6 +180,62 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await expect(incomeDetails.getByRole('heading', { name: '৳ 10.00', exact: true })).toBeVisible();
   await expect(incomeDetails.getByRole('definition').filter({ hasText: '৳ 60.00' })).toBeVisible();
   await incomeDetails.getByRole('button', { name: 'Close dialog', exact: true }).click();
+
+  await page.getByRole('link', { name: 'Reports', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Reports dashboard' })).toBeVisible();
+  const reportTypes = page.getByRole('navigation', { name: 'Report types' });
+  for (const [name, amount] of [
+    ['Loans', '80.01'], ['Investments', '150.00'], ['Expenses', '25.00'],
+    ['Cash & bank', '1,295.24'], ['Member savings', '1,500.25'], ['Income', '50.00'],
+  ]) {
+    await reportTypes.getByRole('button', { name, exact: true }).click();
+    await expect(page.locator('.report-summary').getByText(`৳ ${amount}`, { exact: true }).first()).toBeVisible();
+  }
+  await expect(page.getByRole('cell', { name: 'November shop rent' })).toBeVisible();
+  await page.getByLabel('To date').fill('2026-01-01');
+  await page.getByRole('button', { name: 'Apply dates', exact: true }).click();
+  await expect(page.getByText('No records for this period.')).toBeVisible();
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'November shop rent' })).toBeVisible();
+
+  const workbookDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download Excel' }).click();
+  const workbook = await workbookDownload;
+  expect(workbook.suggestedFilename()).toBe(`FUI-${tag}-income-start-end.xlsx`);
+  expect(readFileSync(await workbook.path()).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+
+  await reportTypes.getByRole('button', { name: 'Member statement', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Download Excel' })).toBeDisabled();
+  await page.getByLabel('Find member by name or number').fill(`FUI-${tag}`);
+  await page.getByRole('button', { name: 'Search members', exact: true }).click();
+  await page.getByLabel('Member', { exact: true }).selectOption(memberId);
+  await expect(page.getByRole('region', { name: 'Report totals' })).toContainText(`Savings Member ${tag} · FUI-${tag}`);
+  await expect(page.getByRole('region', { name: 'Report totals' })).toContainText('৳ 1,500.25');
+  await expect(page.getByRole('region', { name: 'Report totals' })).toContainText('৳ 80.01');
+  await expect(page.getByRole('cell', { name: 'Savings deposit', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Loan repayment', exact: true })).toBeVisible();
+
+  const memberDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download Excel' }).click();
+  expect((await memberDownload).suggestedFilename()).toBe(`FUI-${tag}-member-statement-FUI-${tag}-start-end.xlsx`);
+
+  await page.evaluate(() => { window.print = () => { document.body.dataset.printRequested = 'true'; }; });
+  await page.getByRole('button', { name: 'Save as PDF' }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-print-requested', 'true');
+  await page.emulateMedia({ media: 'print' });
+  const printReport = page.locator('.report-print');
+  await expect(printReport.getByRole('heading', { name: 'Member statement' })).toBeVisible();
+  await expect(printReport.getByText(`Savings Member ${tag} · FUI-${tag}`, { exact: true })).toBeVisible();
+  await expect(printReport.getByRole('cell', { name: 'Loan repayment', exact: true })).toBeVisible();
+  await expect(page.locator('#app')).toBeHidden();
+  const pdf = await page.pdf({ path: testInfo.outputPath('member-statement.pdf'), preferCSSPageSize: true });
+  expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
+  await page.emulateMedia({ media: 'screen' });
+  await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('reports-mobile.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.goto('/finance');
   await page.getByRole('button', { name: 'New transaction', exact: true }).click();

@@ -1,7 +1,7 @@
 import type { Request, RequestHandler, Response } from 'express';
 import * as service from './finance.service.js';
 import * as reports from './finance.reports.js';
-import { accountSchema, decisionSchema, idSchema, keySchema, listSchema, policySchema, reversalSchema, transactionSchema, dateRangeSchema, transactionLogSchema } from './finance.validator.js';
+import { accountSchema, decisionSchema, idSchema, keySchema, listSchema, policySchema, reversalSchema, transactionSchema, dateRangeSchema, transactionLogSchema, reportKindSchema, reportMemberSearchSchema, reportQuerySchema } from './finance.validator.js';
 import { AppError } from '../../utils/errors.js';
 import { auditView } from '../../services/audit.js';
 
@@ -63,4 +63,15 @@ export const investmentSummary: RequestHandler = async (req, res) => { res.json(
 export const bankSummary: RequestHandler = async (req, res) => { res.json(await reports.bankSummary(req.societyId, dateRangeSchema.parse(req.query))); };
 export const expenseSummary: RequestHandler = async (req, res) => { res.json(await reports.expenseSummary(req.societyId, dateRangeSchema.parse(req.query))); };
 export const incomeSummary: RequestHandler = async (req, res) => { res.json(await reports.incomeSummary(req.societyId, dateRangeSchema.parse(req.query))); };
+export const reportMembers: RequestHandler = async (req, res) => {
+  const { search } = reportMemberSearchSchema.parse(req.query);
+  res.json(await reports.reportMembers(req.societyId, search));
+};
+export const financialReport: RequestHandler = async (req, res) => {
+  const kind = reportKindSchema.parse(req.params.kind);
+  const query = reportQuerySchema.parse(req.query);
+  const report = await reports.financialReport(req.societyId, kind, query);
+  if (query.scope === 'full') await auditView(req.user.id, req.societyId, 'FINANCE_REPORT_EXPORTED', 'finance_report', kind);
+  res.set('Cache-Control', 'no-store').json(report);
+};
 

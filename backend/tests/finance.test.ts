@@ -292,6 +292,29 @@ describe('Phase 2 financial workflow', () => {
     expect((await approve(pendingReversal.body.id)).status).toBe(200);
     expect((await reverse(repayment.body.id)).status).toBe(200);
     expect(await loanSummary()).toEqual({ disbursed: '100.01', repaid: '60.00', outstanding: '40.01', pending: 3 });
+
+    const statementPath = '/api/finance/reports/member-statement';
+    const memberQuery = { memberId, from: '2026-11-09', to: '2026-11-09' };
+    const statement = await request(app).get(statementPath).set(headers('ACCOUNTANT')).query({ ...memberQuery, scope: 'full' }).expect(200);
+    expect(statement.body.member).toEqual({ id: memberId, fullName: 'Finance Member', memberNo: `FIN-${tag}` });
+    expect(statement.body.summary).toContainEqual({ label: 'Closing savings', amount: '1030.35' });
+    expect(statement.body.summary).toContainEqual({ label: 'Closing loan balance', amount: '40.01' });
+    const statementTransactions = statement.body.items.map((row: { transactionNo: string }) => row.transactionNo);
+    expect(statementTransactions).toEqual(expect.arrayContaining([fund.body.transactionNo, disbursement.body.transactionNo, repayment.body.transactionNo]));
+    expect(statementTransactions).not.toContain(second.body.transactionNo);
+    const followingPeriod = await request(app).get(statementPath).set(headers('ADMIN')).query({ memberId, from: '2026-11-10' }).expect(200);
+    expect(followingPeriod.body.items).toEqual([]);
+    expect(followingPeriod.body.summary).toContainEqual({ label: 'Opening loan balance', amount: '40.01' });
+    const secondLoans = await request(app).get('/api/finance/reports/loans').set(headers('ADMIN')).query({ memberId: secondMemberId }).expect(200);
+    expect(secondLoans.body.items.map((row: { transactionNo: string }) => row.transactionNo).sort()).toEqual([pendingReversal.body.transactionNo, second.body.transactionNo].sort());
+    await request(app).get(statementPath).set(headers('ADMIN')).expect(422);
+    await request(app).get(statementPath).set(headers('ADMIN', otherSocietyId)).query(memberQuery).expect(404);
+    await request(app).get(statementPath).set(headers('MEMBER')).query({ ...memberQuery, scope: 'full' }).expect(403);
+    const search = { search: `FIN-${tag}` };
+    const members = await request(app).get('/api/finance/report-members').set(headers('ACCOUNTANT')).query(search).expect(200);
+    expect(members.body.items).toEqual([statement.body.member]);
+    const otherMembers = await request(app).get('/api/finance/report-members').set(headers('ADMIN', otherSocietyId)).query(search).expect(200);
+    expect(otherMembers.body.items).toEqual([]);
   });
   it('reports other income and investment profit by date, including approved reversals', async () => {
     const totals = async (from = '2026-11-10', to?: string) =>
@@ -329,6 +352,15 @@ describe('Phase 2 financial workflow', () => {
     expect(await totals('2026-11-10', '2026-11-10')).toEqual({ otherIncome: '50.75', investmentProfit: '2.25', total: '53.00' });
     expect(await totals('2026-11-11')).toEqual({ otherIncome: '-50.75', investmentProfit: '0.00', total: '-50.75' });
     expect(await totals()).toEqual({ otherIncome: '0.00', investmentProfit: '2.25', total: '2.25' });
+
+    const incomeReport = '/api/finance/reports/income';
+    const full = await request(app).get(incomeReport).set(headers('ADMIN')).query({ from: '2026-11-10', scope: 'full' }).expect(200);
+    expect(full.body.summary).toContainEqual({ label: 'Total income', amount: '2.25' });
+    expect(full.body.items.map((row: { amount: string }) => row.amount).sort()).toEqual(['-50.75', '2.25', '50.75']);
+    const filtered = await request(app).get(incomeReport).set(headers('ADMIN')).query({ from: '2026-11-11', to: '2026-11-11' }).expect(200);
+    expect(filtered.body.items).toMatchObject([{ date: '2026-11-11', amount: '-50.75' }]);
+    expect((await request(app).get(incomeReport).set(headers('ADMIN', otherSocietyId)).expect(200)).body.items).toEqual([]);
+    await request(app).get(incomeReport).set(headers('MEMBER')).query({ scope: 'full' }).expect(403);
 
     const history = await request(app).get('/api/finance/transactions').set(headers('ADMIN')).query({ scope: 'income', from: '2026-11-10' }).expect(200);
     expect(history.body.total).toBe(3);
