@@ -1,5 +1,5 @@
 import writeXlsxFile, { type CellObject } from 'write-excel-file/browser';
-import { reportColumns, type ReportDocument } from './report-data';
+import { reportAccountLabel, reportColumns, type ReportDocument } from './report-data';
 
 function heading(value: string): CellObject {
   return { value, fontWeight: 'bold', backgroundColor: '#1F4D3C', textColor: '#FFFFFF', wrap: true };
@@ -20,6 +20,7 @@ export async function downloadWorkbook({ kind, data, title, society, period, fil
       data: [
         [heading(title)], ['Society', society],
         ...(data.member ? [['Member', data.member.fullName], ['Member number', data.member.memberNo]] : []),
+        ...(data.account ? [['Account', { value: reportAccountLabel(data.account), type: String, wrap: true }]] : []),
         ['Period', period], ['Records', data.total], [],
         [heading('Metric'), heading('Amount (BDT)')],
         ...data.summary.map(item => [item.label, moneyCell(item.amount)]),

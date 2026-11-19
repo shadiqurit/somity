@@ -67,6 +67,9 @@ export const reportMembers: RequestHandler = async (req, res) => {
   const { search } = reportMemberSearchSchema.parse(req.query);
   res.json(await reports.reportMembers(req.societyId, search));
 };
+export const reportAccounts: RequestHandler = async (req, res) => {
+  res.json({ items: await reports.reportCashAccounts(req.societyId) });
+};
 export const financialReport: RequestHandler = async (req, res) => {
   const kind = reportKindSchema.parse(req.params.kind);
   const query = reportQuerySchema.parse(req.query);

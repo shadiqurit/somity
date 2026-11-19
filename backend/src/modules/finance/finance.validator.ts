@@ -37,11 +37,12 @@ export const decisionSchema = z.object({ decision: z.enum(['APPROVE', 'REJECT'])
 export const accountSchema = z.object({ code: z.string().trim().min(2).max(40).regex(/^[a-zA-Z0-9-]+$/).transform(v => v.toUpperCase()).refine(v => !['MEMBER-SAVINGS','SYS-LOANS','SYS-INVESTMENTS','SYS-PROFIT','SYS-EXPENSE'].includes(v), 'Reserved system account code'), name: z.string().trim().min(2).max(120), kind: z.enum(['CASH', 'BANK']), bankName: z.string().trim().max(120).default(''), accountNumberLast4: z.union([z.string().regex(/^\d{4}$/), z.literal('')]).default('') }).strict().refine(v => v.kind !== 'BANK' || v.bankName.length >= 2, { path: ['bankName'], message: 'Bank name is required' });
 export const policySchema = z.object({ version: z.number().int().min(0), requiredApprovals: z.number().int().min(1).max(2), allowSelfApproval: z.boolean() }).strict();
 export const dateRangeSchema = z.object({ from: z.iso.date().optional(), to: z.iso.date().optional() }).refine(v => !v.from || !v.to || v.from <= v.to, { path: ['to'], message: 'End date must be on or after start date' });
-export const reportKindSchema = z.enum(['loans', 'investments', 'income', 'expenses', 'bank', 'savings', 'member-statement']);
+export const reportKindSchema = z.enum(['loans', 'loan-disbursements', 'loan-repayments', 'investments', 'income', 'expenses', 'bank', 'bank-statement', 'savings', 'member-statement']);
 export const reportQuerySchema = dateRangeSchema.safeExtend({
   page: z.coerce.number().int().min(1).max(100000).default(1),
   scope: z.enum(['preview', 'full']).default('preview'),
   memberId: idSchema.optional(),
+  accountId: idSchema.optional(),
 });
 export const reportMemberSearchSchema = z.object({ search: z.string().trim().max(120).default('') });
 export const transactionLogSchema = z.object({

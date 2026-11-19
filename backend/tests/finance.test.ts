@@ -286,6 +286,15 @@ describe('Phase 2 financial workflow', () => {
     const afterTransferReversal = await request(app).get('/api/finance/bank-summary').set(headers('ADMIN')).expect(200);
     expect(afterTransferReversal.body.summary).toEqual(beforeTransferReversal.body.summary);
     expect(afterTransferReversal.body.items.find((row: { id: string }) => row.id === bank.id).closing).toBe('0.00');
+    const accountFilter = { accountId: bank.id, from: '2026-11-09', to: '2026-11-09' };
+    const bankReport = await request(app).get('/api/finance/reports/bank').set(headers('ADMIN')).query(accountFilter).expect(200);
+    expect(bankReport.body.items).toMatchObject([{ id: bank.id, deposits: '100.00', withdrawals: '100.00', closing: '0.00' }]);
+    const bankStatement = await request(app).get('/api/finance/reports/bank-statement').set(headers('ADMIN')).query(accountFilter).expect(200);
+    expect(bankStatement.body.summary).toEqual(bankReport.body.summary);
+    expect(bankStatement.body.items).toMatchObject([
+      { transactionNo: transfer.body.transactionNo, incoming: '100.00', outgoing: '0.00', balance: '100.00', details: 'Main cash · CASH-01' },
+      { movement: 'Reversal · Transfer', incoming: '0.00', outgoing: '100.00', balance: '0.00' },
+    ]);
     const pendingReversal = await request(app).post(`/api/finance/transactions/${second.body.id}/reversal`)
       .set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID()).send({ effectiveDate: '2026-11-09', note: 'Undo second loan' }).expect(201);
     expect(await loanSummary()).toEqual({ disbursed: '101.01', repaid: '80.01', outstanding: '21.00', pending: 4 });
@@ -307,6 +316,28 @@ describe('Phase 2 financial workflow', () => {
     expect(followingPeriod.body.summary).toContainEqual({ label: 'Opening loan balance', amount: '40.01' });
     const secondLoans = await request(app).get('/api/finance/reports/loans').set(headers('ADMIN')).query({ memberId: secondMemberId }).expect(200);
     expect(secondLoans.body.items.map((row: { transactionNo: string }) => row.transactionNo).sort()).toEqual([pendingReversal.body.transactionNo, second.body.transactionNo].sort());
+
+    const disbursements = await request(app).get('/api/finance/reports/loan-disbursements').set(headers('ACCOUNTANT')).query(memberQuery).expect(200);
+    expect(disbursements.body.items).toMatchObject([{ transactionNo: disbursement.body.transactionNo, movement: 'Loan disbursement', amount: '100.01' }]);
+    expect(disbursements.body.summary).toContainEqual({ label: 'Net disbursed', amount: '100.01' });
+    const cancelledDisbursement = await request(app).get('/api/finance/reports/loan-disbursements').set(headers('ADMIN')).query({ memberId: secondMemberId }).expect(200);
+    expect(cancelledDisbursement.body.summary).toContainEqual({ label: 'Net disbursed', amount: '0.00' });
+    expect(cancelledDisbursement.body.items).toContainEqual(expect.objectContaining({ movement: 'Reversal · Loan disbursement', amount: '-1.00' }));
+    const repayments = await request(app).get('/api/finance/reports/loan-repayments').set(headers('ADMIN')).query({ ...memberQuery, scope: 'full' }).expect(200);
+    expect(repayments.body.items.map((row: { amount: string }) => row.amount).sort()).toEqual(['-20.01', '20.01', '60.00']);
+    expect(repayments.body.summary).toEqual([
+      { label: 'Gross repaid', amount: '80.01' }, { label: 'Repayment reversals', amount: '20.01' }, { label: 'Net repaid', amount: '60.00' },
+    ]);
+    const combined = await request(app).get('/api/finance/reports/loans').set(headers('ADMIN')).query(memberQuery).expect(200);
+    expect(combined.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ transactionNo: disbursement.body.transactionNo, disbursed: '100.01', repaid: '0.00' }),
+      expect.objectContaining({ transactionNo: repayment.body.transactionNo, disbursed: '0.00', repaid: '20.01' }),
+      expect.objectContaining({ movement: 'Reversal · Loan repayment', disbursed: '0.00', repaid: '-20.01' }),
+    ]));
+    expect(combined.body.summary).toContainEqual({ label: 'Closing receivables', amount: '40.01' });
+    await request(app).get('/api/finance/reports/loan-repayments').set(headers('ADMIN', otherSocietyId)).query(memberQuery).expect(404);
+    await request(app).get('/api/finance/reports/loan-disbursements').set(headers('MEMBER')).query(memberQuery).expect(403);
+
     await request(app).get(statementPath).set(headers('ADMIN')).expect(422);
     await request(app).get(statementPath).set(headers('ADMIN', otherSocietyId)).query(memberQuery).expect(404);
     await request(app).get(statementPath).set(headers('MEMBER')).query({ ...memberQuery, scope: 'full' }).expect(403);
@@ -674,5 +705,36 @@ describe('Phase 2 financial workflow', () => {
     expect(platform.body.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ action: 'AUTH_LOGOUT', actorRole: 'MEMBER', actor: { id: userIds.MEMBER, name: 'Finance MEMBER' }, society: expect.objectContaining({ id: societyId }) }),
     ]));
+  });
+  it('carries bank running balances across pages and scopes the full statement to its account', async () => {
+    const account = await request(app).post('/api/finance/accounts').set(headers('ADMIN'))
+      .send({ code: 'BANK-STATEMENT', kind: 'BANK', name: 'Statement account', bankName: 'Local Bank', accountNumberLast4: '6789' }).expect(201);
+    const accountId = account.body.id;
+    const postIncome = async (effectiveDate: string, amount: string) => {
+      const posted = await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+        .send({ type: 'OTHER_INCOME', cashAccountId: accountId, effectiveDate, amount }).expect(201);
+      expect((await approve(posted.body.id)).status).toBe(200);
+    };
+    await postIncome('2026-11-09', '10.00');
+    for (let i = 0; i < 26; i++) await postIncome('2026-11-10', '1.25');
+
+    const path = '/api/finance/reports/bank-statement';
+    const query = { accountId, from: '2026-11-10', to: '2026-11-10' };
+    const preview = await request(app).get(path).set(headers('ADMIN')).query({ ...query, page: 2 }).expect(200);
+    const full = await request(app).get(path).set(headers('ADMIN')).query({ ...query, scope: 'full' }).expect(200);
+    expect(preview.body).toMatchObject({ account: { id: accountId, accountNumberLast4: '6789' }, total: 26, page: 2, pages: 2 });
+    expect(preview.body.items).toEqual(full.body.items.slice(25));
+    expect(full.body.items).toHaveLength(26);
+    expect(full.body.items[0]).toMatchObject({ incoming: '1.25', balance: '11.25' });
+    expect(full.body.items[25]).toMatchObject({ incoming: '1.25', balance: '42.50' });
+    expect(full.body.summary).toContainEqual({ label: 'Opening balance', amount: '10.00' });
+    expect(full.body.summary).toContainEqual({ label: 'Closing balance', amount: '42.50' });
+
+    const accounts = await request(app).get('/api/finance/report-accounts').set(headers('ACCOUNTANT')).expect(200);
+    expect(accounts.body.items).toContainEqual(full.body.account);
+    expect(accounts.body.items.every((item: { kind: string }) => ['CASH', 'BANK'].includes(item.kind))).toBe(true);
+    await request(app).get(path).set(headers('ADMIN')).expect(422);
+    await request(app).get(path).set(headers('ADMIN', otherSocietyId)).query(query).expect(404);
+    await request(app).get(path).set(headers('MEMBER')).query({ ...query, scope: 'full' }).expect(403);
   });
 });

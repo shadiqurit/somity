@@ -6,6 +6,9 @@ import { todayDhaka, type FinanceListInput, type reportKindSchema, type reportQu
 type Tx = Prisma.TransactionClient;
 const zero = () => new Prisma.Decimal(0);
 const range = (input: { from?: string; to?: string }) => ({ ...(input.from ? { gte: new Date(input.from) } : {}), ...(input.to ? { lte: new Date(input.to) } : {}) });
+const cashAccountKinds: AccountKind[] = ['CASH', 'BANK'];
+const reportAccountSelect = { id: true, name: true, code: true, kind: true, bankName: true, accountNumberLast4: true } as const;
+const reportPageSize = 25;
 const movements = (type: FinancialTransactionType): Prisma.FinancialTransactionWhereInput => ({
   OR: [{ type }, { type: 'REVERSAL', reversalOf: { type } }],
 });
@@ -114,22 +117,42 @@ export async function expenseSummary(societyId: string, input: { from?: string; 
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 
+async function accountPeriod(tx: Tx, societyId: string, accountId: string, input: { from?: string; to?: string }) {
+  const base = { societyId, accountId };
+  const sum = { debit: true, credit: true } as const;
+  const where = { ...base, transaction: { status: 'POSTED' as const, effectiveDate: range(input) } };
+  const before = input.from ? await tx.ledgerEntry.aggregate({
+    where: { ...base, transaction: { status: 'POSTED', effectiveDate: { lt: new Date(input.from) } } }, _sum: sum,
+  }) : undefined;
+  const { _sum } = await tx.ledgerEntry.aggregate({ where, _sum: sum });
+  const opening = (before?._sum.debit ?? zero()).minus(before?._sum.credit ?? zero());
+  const incoming = _sum.debit ?? zero();
+  const outgoing = _sum.credit ?? zero();
+  return {
+    where,
+    opening: opening.toFixed(2),
+    deposits: incoming.toFixed(2),
+    withdrawals: outgoing.toFixed(2),
+    closing: opening.plus(incoming).minus(outgoing).toFixed(2),
+  };
+}
+
+export function reportCashAccounts(societyId: string) {
+  return db.ledgerAccount.findMany({ where: { societyId, kind: { in: cashAccountKinds } }, orderBy: { code: 'asc' }, select: reportAccountSelect });
+}
+
 export async function bankSummary(societyId: string, input: { from?: string; to?: string }) {
   const effectiveDate = range(input);
-  const accountKinds = ['CASH', 'BANK'] as const;
   return db.$transaction(async tx => {
-    const accounts = await tx.ledgerAccount.findMany({ where: { societyId, kind: { in: [...accountKinds] } }, orderBy: { code: 'asc' } });
+    const accounts = await tx.ledgerAccount.findMany({ where: { societyId, kind: { in: cashAccountKinds } }, orderBy: { code: 'asc' } });
     const items = await Promise.all(accounts.map(async account => {
-      const base = { societyId, accountId: account.id };
-      const before = await tx.ledgerEntry.aggregate({ where: { ...base, transaction: { status: 'POSTED', effectiveDate: { lt: new Date(input.from ?? '1000-01-01') } } }, _sum: { debit: true, credit: true } });
-      const totals = await tx.ledgerEntry.aggregate({ where: { ...base, transaction: { status: 'POSTED', effectiveDate } }, _sum: { debit: true, credit: true } });
-      const opening = (before._sum.debit ?? zero()).minus(before._sum.credit ?? zero()); const incoming = totals._sum.debit ?? zero(); const outgoing = totals._sum.credit ?? zero();
-      return { ...account, opening: opening.toFixed(2), deposits: incoming.toFixed(2), withdrawals: outgoing.toFixed(2), closing: opening.plus(incoming).minus(outgoing).toFixed(2) };
+      const { opening, deposits, withdrawals, closing } = await accountPeriod(tx, societyId, account.id, input);
+      return { ...account, opening, deposits, withdrawals, closing };
     }));
     const [expenses, flows] = await Promise.all([
       expenseLedgerTotals(tx, societyId, effectiveDate),
       tx.ledgerEntry.aggregate({
-        where: { societyId, account: { kind: { in: [...accountKinds] } }, transaction: { status: 'POSTED', effectiveDate, NOT: movements('TRANSFER') } },
+        where: { societyId, account: { kind: { in: cashAccountKinds } }, transaction: { status: 'POSTED', effectiveDate, NOT: movements('TRANSFER') } },
         _sum: { debit: true, credit: true },
       }),
     ]);
@@ -193,6 +216,72 @@ const transactionLabels: Record<FinancialTransactionType, string> = {
   EXPENSE: 'Expense', OTHER_INCOME: 'Other income', TRANSFER: 'Transfer', REVERSAL: 'Reversal',
 };
 
+function movementLabel(type: FinancialTransactionType, reversedType?: FinancialTransactionType) {
+  return reversedType ? `Reversal · ${transactionLabels[reversedType]}` : transactionLabels[type];
+}
+
+function bankReportTotals(opening: string, incoming: string, outgoing: string, closing: string) {
+  return [
+    { label: 'Opening balance', amount: opening }, { label: 'Money in', amount: incoming },
+    { label: 'Money out', amount: outgoing }, { label: 'Closing balance', amount: closing },
+  ];
+}
+
+type ReportQuery = ReturnType<typeof reportQuerySchema.parse>;
+
+function accountReport(societyId: string, accountId: string, input: ReportQuery, statement: boolean) {
+  return db.$transaction(async tx => {
+    const account = await tx.ledgerAccount.findFirst({
+      where: { societyId, id: accountId, kind: { in: cashAccountKinds } }, select: reportAccountSelect,
+    });
+    if (!account) throw new AppError(404, 'Cash or bank account not found');
+    const { where, opening, deposits, withdrawals, closing } = await accountPeriod(tx, societyId, account.id, input);
+    const summary = bankReportTotals(opening, deposits, withdrawals, closing);
+    if (!statement) return { account, summary, items: [{ ...account, opening, deposits, withdrawals, closing }], total: 1, page: 1, pages: 1 };
+
+    const full = input.scope === 'full';
+    const orderBy: Prisma.LedgerEntryOrderByWithRelationInput[] = [
+      { transaction: { effectiveDate: 'asc' } }, { transaction: { postedAt: 'asc' } }, { transactionId: 'asc' }, { line: 'asc' },
+    ];
+    const skip = full ? 0 : (input.page - 1) * reportPageSize;
+    const rows = await tx.ledgerEntry.findMany({
+      where, orderBy, ...(full ? {} : { skip, take: reportPageSize }),
+      select: {
+        id: true, debit: true, credit: true,
+        member: { select: { fullName: true, memberNo: true } },
+        transaction: { select: {
+          effectiveDate: true, transactionNo: true, type: true, note: true, reference: true, details: true,
+          investment: { select: { title: true } }, reversalOf: { select: { type: true, transactionNo: true } },
+          entries: {
+            where: { accountId: { not: account.id }, account: { kind: { in: cashAccountKinds } } },
+            select: { account: { select: { name: true, code: true } } },
+          },
+        } },
+      },
+    });
+    const prior = skip && rows.length ? await tx.ledgerEntry.aggregate({
+      where, orderBy, take: skip, _sum: { debit: true, credit: true },
+    }) : undefined;
+    let balance = new Prisma.Decimal(opening).plus(prior?._sum.debit ?? zero()).minus(prior?._sum.credit ?? zero());
+    const items = rows.map(({ id, debit, credit, member, transaction }) => {
+      balance = balance.plus(debit).minus(credit);
+      const { reversalOf, type } = transaction;
+      const otherAccount = transaction.entries[0]?.account;
+      const subject = member ? `${member.memberNo} · ${member.fullName}` : transaction.investment?.title;
+      const transferAccount = otherAccount ? `${otherAccount.name} · ${otherAccount.code}` : undefined;
+      const expense = (reversalOf?.type ?? type) === 'EXPENSE' ? transaction.details as ProductDetails | null : null;
+      return {
+        id, date: transaction.effectiveDate.toISOString().slice(0, 10), transactionNo: transaction.transactionNo,
+        movement: movementLabel(type, reversalOf?.type),
+        details: [subject, transferAccount, expense?.category, expense?.payee, reversalOf?.transactionNo ?? transaction.reference, transaction.note].filter(Boolean).join(' · '),
+        incoming: debit.toFixed(2), outgoing: credit.toFixed(2), balance: balance.toFixed(2),
+      };
+    });
+    const total = full ? rows.length : await tx.ledgerEntry.count({ where });
+    return { account, summary, items, total, page: full ? 1 : input.page, pages: full ? 1 : Math.ceil(total / reportPageSize) };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
 async function reportTotals(tx: Tx, societyId: string, kind: keyof typeof reportAccounts, input: { from?: string; to?: string; memberId?: string }) {
   const effectiveDate = range(input);
   const balance = (account: AccountKind, scope: Prisma.FinancialTransactionWhereInput = {}) =>
@@ -233,39 +322,56 @@ async function reportTotals(tx: Tx, societyId: string, kind: keyof typeof report
   return { 'Opening savings': opening, 'Net savings movement': change, 'Closing savings': closing };
 }
 
-export async function financialReport(societyId: string, kind: ReturnType<typeof reportKindSchema.parse>, input: ReturnType<typeof reportQuerySchema.parse>) {
-  const { memberId } = input;
+async function loanMovementTotals(tx: Tx, where: Prisma.LedgerEntryWhereInput, isRepayment: boolean) {
+  const { _sum } = await tx.ledgerEntry.aggregate({ where, _sum: { debit: true, credit: true } });
+  const debit = _sum.debit ?? zero();
+  const credit = _sum.credit ?? zero();
+  return isRepayment
+    ? { 'Gross repaid': credit, 'Repayment reversals': debit, 'Net repaid': credit.minus(debit) }
+    : { 'Gross disbursed': debit, 'Disbursement reversals': credit, 'Net disbursed': debit.minus(credit) };
+}
+
+export async function financialReport(societyId: string, kind: ReturnType<typeof reportKindSchema.parse>, input: ReportQuery) {
+  const { memberId, accountId } = input;
+  const splitLoanReport = kind === 'loan-disbursements' || kind === 'loan-repayments';
+  const isRepaymentReport = kind === 'loan-repayments';
   if (kind === 'member-statement' && !memberId) throw new AppError(422, 'Choose a member for the statement');
-  if (memberId && kind !== 'member-statement' && kind !== 'loans' && kind !== 'savings') {
+  if (memberId && !splitLoanReport && kind !== 'member-statement' && kind !== 'loans' && kind !== 'savings') {
     throw new AppError(422, 'Member filters are available for loans, savings and member statements');
   }
+  if (accountId && kind !== 'bank' && kind !== 'bank-statement') throw new AppError(422, 'Account filters are available for cash and bank reports');
+  if (kind === 'bank-statement') {
+    if (!accountId) throw new AppError(422, 'Choose an account for the statement');
+    return accountReport(societyId, accountId, input, true);
+  }
   if (kind === 'bank') {
+    if (accountId) return accountReport(societyId, accountId, input, false);
     const { items, summary } = await bankSummary(societyId, input);
     return {
       items: items.map(({ id, name, code, kind, opening, deposits, withdrawals, closing }) => ({ id, name, code, kind, opening, deposits, withdrawals, closing })),
-      summary: [
-        { label: 'Opening balance', amount: summary.opening }, { label: 'Money in', amount: summary.incoming },
-        { label: 'Money out', amount: summary.outgoing }, { label: 'Closing balance', amount: summary.closing },
-      ],
+      summary: bankReportTotals(summary.opening, summary.incoming, summary.outgoing, summary.closing),
       total: items.length, page: 1, pages: 1,
     };
   }
 
-  const pageSize = 25;
+  const accountKinds = splitLoanReport ? reportAccounts.loans : reportAccounts[kind];
   const where: Prisma.LedgerEntryWhereInput = {
-    societyId, memberId, account: { kind: { in: [...reportAccounts[kind]] } },
-    transaction: { status: 'POSTED', effectiveDate: range(input) },
+    societyId, memberId, account: { kind: { in: [...accountKinds] } },
+    transaction: {
+      status: 'POSTED', effectiveDate: range(input),
+      ...(splitLoanReport ? movements(isRepaymentReport ? 'LOAN_REPAYMENT' : 'LOAN_DISBURSEMENT') : {}),
+    },
   };
   return db.$transaction(async tx => {
     const reportMember = memberId ? await tx.member.findUnique({
       where: { societyId_id: { societyId, id: memberId } }, select: reportMemberSelect,
     }) : null;
     if (memberId && !reportMember) throw new AppError(404, 'Member not found');
-    const totals = await reportTotals(tx, societyId, kind, input);
+    const totals = splitLoanReport ? await loanMovementTotals(tx, where, isRepaymentReport) : await reportTotals(tx, societyId, kind, input);
     const rows = await tx.ledgerEntry.findMany({
       where,
       orderBy: [{ transaction: { effectiveDate: 'desc' } }, { transaction: { postedAt: 'desc' } }, { transactionId: 'asc' }, { line: 'asc' }],
-      ...(input.scope === 'preview' ? { skip: (input.page - 1) * pageSize, take: pageSize } : {}),
+      ...(input.scope === 'preview' ? { skip: (input.page - 1) * reportPageSize, take: reportPageSize } : {}),
       select: {
         id: true, debit: true, credit: true, account: { select: { kind: true } },
         member: { select: { fullName: true, memberNo: true } },
@@ -278,18 +384,24 @@ export async function financialReport(societyId: string, kind: ReturnType<typeof
     const total = input.scope === 'full' ? rows.length : await tx.ledgerEntry.count({ where });
     const items = rows.map(({ id, debit, credit, account, member, transaction }) => {
       const { reversalOf, type } = transaction;
-      const movement = reversalOf ? `Reversal · ${transactionLabels[reversalOf.type]}` : transactionLabels[type];
+      const movement = movementLabel(type, reversalOf?.type);
       const subject = member && !reportMember ? `${member.memberNo} · ${member.fullName}` : transaction.investment?.title;
       const base = account.kind === 'INVESTMENT_ASSET' ? 'Principal' : account.kind === 'INVESTMENT_INCOME' ? 'Profit' : '';
       const expense = kind === 'expenses' ? transaction.details as ProductDetails | null : null;
+      const amount = creditPositive(account.kind) || isRepaymentReport ? credit.minus(debit) : debit.minus(credit);
+      const originalType = reversalOf?.type ?? type;
       return {
         id, date: transaction.effectiveDate.toISOString().slice(0, 10), transactionNo: transaction.transactionNo,
         movement: [movement, kind === 'investments' ? base : ''].filter(Boolean).join(' · '),
         details: [subject, expense?.category, expense?.payee, reversalOf?.transactionNo ?? transaction.reference, transaction.note].filter(Boolean).join(' · '),
-        amount: (creditPositive(account.kind) ? credit.minus(debit) : debit.minus(credit)).toFixed(2),
+        amount: amount.toFixed(2),
+        ...(kind === 'loans' ? {
+          disbursed: originalType === 'LOAN_DISBURSEMENT' ? amount.toFixed(2) : '0.00',
+          repaid: originalType === 'LOAN_REPAYMENT' ? amount.negated().toFixed(2) : '0.00',
+        } : {}),
       };
     });
     const summary = Object.entries(totals).map(([label, amount]) => ({ label, amount: amount.toFixed(2) }));
-    return { member: reportMember, items, summary, total, page: input.scope === 'full' ? 1 : input.page, pages: input.scope === 'full' ? 1 : Math.ceil(total / pageSize) };
+    return { member: reportMember, items, summary, total, page: input.scope === 'full' ? 1 : input.page, pages: input.scope === 'full' ? 1 : Math.ceil(total / reportPageSize) };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }

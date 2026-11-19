@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { bdt } from '../finance/types';
-import { reportCell, reportColumns, reportMemberLabel, type ReportDocument } from './report-data';
+import { reportAccountLabel, reportCell, reportColumns, reportMemberLabel, type ReportDocument } from './report-data';
 
 const props = defineProps<{ report: ReportDocument }>();
 const columns = computed(() => reportColumns(props.report.kind));
@@ -14,6 +14,7 @@ const columns = computed(() => reportColumns(props.report.kind));
         <p>{{ report.society }}</p>
         <h1>{{ report.title }}</h1>
         <p v-if="report.data.member">{{ reportMemberLabel(report.data.member) }}</p>
+        <p v-if="report.data.account">{{ reportAccountLabel(report.data.account) }}</p>
         <p>{{ report.period }} · {{ report.data.total }} records · BDT</p>
       </header>
       <dl class="report-print-summary">
@@ -41,7 +42,7 @@ const columns = computed(() => reportColumns(props.report.kind));
   body:has(.report-print) { margin: 0; background: white; }
   body:has(.report-print) #app { display: none !important; }
   .report-print { display: block; page: somity-report; color: #172721; background: white; font: 10pt/1.45 system-ui, sans-serif; }
-  .report-print header { border-bottom: 2px solid #1f4d3c; padding-bottom: 10pt; }
+  .report-print header { border-bottom: 2px solid #1f4d3c; padding-bottom: 10pt; overflow-wrap: anywhere; }
   .report-print header h1 { font-size: 23pt; margin: 2pt 0; }
   .report-print header p { margin: 0; }
   .report-print-summary { display: flex; flex-wrap: wrap; gap: 10pt 22pt; margin: 12pt 0; break-inside: avoid; }

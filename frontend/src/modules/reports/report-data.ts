@@ -1,11 +1,14 @@
 import { bdt } from '../finance/types';
 
-export type ReportKind = 'loans' | 'investments' | 'income' | 'expenses' | 'bank' | 'savings' | 'member-statement';
+export type LoanReportKind = 'loans' | 'loan-disbursements' | 'loan-repayments';
+export type ReportKind = LoanReportKind | 'investments' | 'income' | 'expenses' | 'bank' | 'bank-statement' | 'savings' | 'member-statement';
 export type ReportDates = { from?: string; to?: string };
 export type ReportMember = { id: string; fullName: string; memberNo: string };
+export type ReportAccount = { id: string; name: string; code: string; kind: 'BANK' | 'CASH'; bankName: string | null; accountNumberLast4: string | null };
 export type ReportRow = { id: string } & Record<string, string>;
 export type ReportData = {
   member?: ReportMember | null;
+  account?: ReportAccount | null;
   items: ReportRow[];
   summary: { label: string; amount: string }[];
   total: number;
@@ -17,12 +20,19 @@ export function reportMemberLabel(member: ReportMember) {
   return `${member.fullName} · ${member.memberNo}`;
 }
 
+export function reportAccountLabel(account: ReportAccount) {
+  return [account.name, account.code, account.bankName, account.accountNumberLast4 && `••••${account.accountNumberLast4}`].filter(Boolean).join(' · ');
+}
+
 type Column = { key: string; label: string; width: number; money?: boolean };
-const movementColumns: Column[] = [
+const transactionColumns: Column[] = [
   { key: 'date', label: 'Date', width: 14 },
   { key: 'transactionNo', label: 'Transaction', width: 22 },
   { key: 'movement', label: 'Movement', width: 30 },
   { key: 'details', label: 'Details', width: 48 },
+];
+const movementColumns: Column[] = [
+  ...transactionColumns,
   { key: 'amount', label: 'Net amount (BDT)', width: 22, money: true },
 ];
 const bankColumns: Column[] = [
@@ -34,9 +44,30 @@ const bankColumns: Column[] = [
   { key: 'withdrawals', label: 'Money out (BDT)', width: 22, money: true },
   { key: 'closing', label: 'Closing (BDT)', width: 22, money: true },
 ];
+const bankStatementColumns: Column[] = [
+  ...transactionColumns,
+  { key: 'incoming', label: 'Money in (BDT)', width: 20, money: true },
+  { key: 'outgoing', label: 'Money out (BDT)', width: 20, money: true },
+  { key: 'balance', label: 'Balance (BDT)', width: 20, money: true },
+];
+const loanReportColumns: Record<LoanReportKind, Column[]> = {
+  loans: [
+    ...transactionColumns,
+    { key: 'disbursed', label: 'Disbursed (BDT)', width: 22, money: true },
+    { key: 'repaid', label: 'Repaid (BDT)', width: 22, money: true },
+  ],
+  'loan-disbursements': [...transactionColumns, { key: 'amount', label: 'Disbursed (BDT)', width: 22, money: true }],
+  'loan-repayments': [...transactionColumns, { key: 'amount', label: 'Repaid (BDT)', width: 22, money: true }],
+};
+
+export function isLoanReport(kind: ReportKind): kind is LoanReportKind {
+  return kind === 'loans' || kind === 'loan-disbursements' || kind === 'loan-repayments';
+}
 
 export function reportColumns(kind: ReportKind) {
-  return kind === 'bank' ? bankColumns : movementColumns;
+  if (isLoanReport(kind)) return loanReportColumns[kind];
+  if (kind === 'bank') return bankColumns;
+  return kind === 'bank-statement' ? bankStatementColumns : movementColumns;
 }
 
 export function reportCell(row: ReportRow, column: Column) {

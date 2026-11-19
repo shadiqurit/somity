@@ -4,6 +4,7 @@ import * as controller from './finance.controller.js';
 export const financeRouter = Router();
 financeRouter.get('/reports/:kind', requirePermission('finance.read'), controller.financialReport);
 financeRouter.get('/report-members', requirePermission('finance.read'), controller.reportMembers);
+financeRouter.get('/report-accounts', requirePermission('finance.read'), controller.reportAccounts);
 financeRouter.get('/loans/me', requirePermission('profile.read'), controller.ownLoans);
 financeRouter.get('/loans/me/:id', requirePermission('profile.read'), controller.ownLoans);
 financeRouter.get('/loans', requirePermission('finance.read'), controller.loans);

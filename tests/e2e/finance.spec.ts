@@ -24,6 +24,7 @@ async function signOut(page: Page) {
 test.beforeAll(async () => {
   await db.$transaction(tx => syncRoles(tx));
   societyId = (await db.society.create({ data: { code: `FUI-${tag}`, name: `Finance Browser ${tag}` } })).id;
+  await db.ledgerAccount.create({ data: { societyId, code: 'BANK-01', name: 'Reserve account', kind: 'BANK', bankName: 'Local Bank', accountNumberLast4: '4321' } });
   const passwordHash = await hashPassword(password);
   for (const code of ['SOCIETY_ADMIN', 'ACCOUNTANT', 'APPROVER', 'MEMBER']) {
     const role = await db.role.findUniqueOrThrow({ where: { code } }); emails[code] = `${tag}-${code.toLowerCase()}@finance-browser.test`;
@@ -157,7 +158,14 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await page.getByRole('button', { name: 'Transfer funds', exact: true }).click();
   const transfer = page.getByRole('dialog', { name: 'New transaction', exact: true });
   await expect(transfer.getByLabel('Transaction type').locator('option')).toHaveText(['Transfer']);
-  await transfer.getByRole('button', { name: 'Cancel', exact: true }).click();
+  const bank = await db.ledgerAccount.findFirstOrThrow({ where: { societyId, code: 'BANK-01' } });
+  await transfer.getByLabel('Cash or bank account', { exact: true }).selectOption(cash.id);
+  await transfer.getByLabel('Destination cash or bank account').selectOption(bank.id);
+  await transfer.getByLabel('Amount (BDT)').fill('100');
+  await transfer.getByRole('button', { name: 'Submit for approval', exact: true }).click();
+  await expect(transfer).not.toBeVisible();
+  const bankTransfer = await db.financialTransaction.findFirstOrThrow({ where: { societyId, type: 'TRANSFER', status: 'PENDING' } });
+  await approveRequest(bankTransfer.transactionNo);
   await submitProduct('income', 'OTHER_INCOME', '32.50', async dialog => {
     await expect(dialog.getByLabel('Member', { exact: true })).toHaveCount(0);
     await expect(dialog.getByLabel('Receipt / reference (optional)')).toHaveCount(0);
@@ -232,6 +240,70 @@ test('cash account, deposit request, approval, ledger and private member stateme
   expect(pdf.subarray(0, 5).toString()).toBe('%PDF-');
   await page.emulateMedia({ media: 'screen' });
   await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+
+  await reportTypes.getByRole('button', { name: 'Loans', exact: true }).click();
+  const loanReportTypes = page.getByRole('navigation', { name: 'Loan report types', exact: true });
+  await expect(loanReportTypes.getByRole('button', { name: 'Combined', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('columnheader', { name: 'Disbursed (BDT)', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Repaid (BDT)', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Loan disbursement', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Loan repayment', exact: true })).toBeVisible();
+
+  await loanReportTypes.getByRole('button', { name: 'Loan disbursement', exact: true }).click();
+  await expect(page.getByLabel('Member', { exact: true })).toHaveValue(memberId);
+  await expect(page.getByRole('cell', { name: 'Loan disbursement', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Loan repayment', exact: true })).toHaveCount(0);
+
+  await loanReportTypes.getByRole('button', { name: 'Loan repayment', exact: true }).click();
+  await expect(page.getByRole('cell', { name: 'Loan repayment', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Loan disbursement', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('cell', { name: '40.00', exact: true })).toBeVisible();
+  const repaymentDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download Excel' }).click();
+  expect((await repaymentDownload).suggestedFilename()).toBe(`FUI-${tag}-loan-repayments-FUI-${tag}-start-end.xlsx`);
+
+  await page.evaluate(() => { delete document.body.dataset.printRequested; });
+  await page.getByRole('button', { name: 'Save as PDF' }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-print-requested', 'true');
+  await page.emulateMedia({ media: 'print' });
+  await expect(printReport.getByRole('heading', { name: 'Loan repayment report' })).toBeVisible();
+  await expect(printReport.getByRole('cell', { name: 'Loan repayment', exact: true })).toBeVisible();
+  await expect(printReport.getByRole('cell', { name: 'Loan disbursement', exact: true })).toHaveCount(0);
+  await page.emulateMedia({ media: 'screen' });
+  await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+
+  await reportTypes.getByRole('button', { name: 'Bank statement', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Download Excel' })).toBeDisabled();
+  await page.getByLabel('Cash or bank account', { exact: true }).selectOption(bank.id);
+  const bankRows = page.getByRole('table').locator('tbody tr');
+  await expect(bankRows).toHaveCount(1);
+  await expect(bankRows.first()).toContainText(bankTransfer.transactionNo);
+  await expect(bankRows.first()).toContainText('Office cash · CASH-01');
+  await expect(bankRows.first().getByRole('cell', { name: '100.00', exact: true })).toHaveCount(2);
+  const bankDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download Excel' }).click();
+  expect((await bankDownload).suggestedFilename()).toBe(`FUI-${tag}-bank-statement-BANK-01-start-end.xlsx`);
+
+  await page.evaluate(() => { delete document.body.dataset.printRequested; });
+  await page.getByRole('button', { name: 'Save as PDF' }).click();
+  await expect(page.locator('body')).toHaveAttribute('data-print-requested', 'true');
+  await page.emulateMedia({ media: 'print' });
+  await expect(printReport.getByRole('heading', { name: 'Bank statement' })).toBeVisible();
+  await expect(printReport.getByText('Reserve account · BANK-01 · Local Bank · ••••4321')).toBeVisible();
+  const bankPdf = await page.pdf({ path: testInfo.outputPath('bank-statement.pdf'), preferCSSPageSize: true });
+  expect(bankPdf.subarray(0, 5).toString()).toBe('%PDF-');
+  await page.emulateMedia({ media: 'screen' });
+  await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+
+  await reportTypes.getByRole('button', { name: 'Cash & bank', exact: true }).click();
+  await expect(page.getByLabel('Cash or bank account', { exact: true })).toHaveValue(bank.id);
+  await expect(page.getByRole('cell', { name: 'Reserve account', exact: true })).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Office cash', exact: true })).toHaveCount(0);
+  await page.getByLabel('Cash or bank account', { exact: true }).selectOption('');
+  await expect(page.getByRole('cell', { name: 'Office cash', exact: true })).toBeVisible();
+  await reportTypes.getByRole('button', { name: 'Bank statement', exact: true }).click();
+  await page.getByLabel('Cash or bank account', { exact: true }).selectOption(bank.id);
+  await expect(page.getByRole('cell', { name: bankTransfer.transactionNo, exact: true })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('reports-mobile.png'), fullPage: true, animations: 'disabled' });
@@ -292,7 +364,7 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await page.setViewportSize({ width: 1280, height: 720 });
   await signOut(page);
   await signIn(page, 'SOCIETY_ADMIN');
-  await submitProduct('income', 'OTHER_INCOME', '125', async dialog => {
+  await submitProduct('income', 'OTHER_INCOME', '225', async dialog => {
     await dialog.getByLabel('Note (optional)').fill('Community hall rent received');
   });
   await page.goto(`/members/${memberId}`);
