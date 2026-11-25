@@ -9,6 +9,7 @@ import { balancedLines } from '../src/modules/finance/finance.service.js';
 import { moneySchema } from '../src/modules/finance/finance.validator.js';
 import { Prisma } from '@prisma/client';
 import { principalSchedule } from '../src/modules/finance/finance.posting.js';
+import { noteBodySchema, noteListSchema } from '../src/modules/notes/note.validator.js';
 
 describe('loan installments', () => {
   it('keeps exact principal and clamps monthly due dates at month end', () => {
@@ -81,5 +82,21 @@ describe('password storage', () => {
     expect(first).not.toBe(second);
     expect(await verifyPassword('LongSecretPassword123', first)).toBe(true);
     expect(await verifyPassword('wrong-password', first)).toBe(false);
+  });
+});
+
+describe('notes validation', () => {
+  it('validates categories, Bangla text, optional member link, and rejects blank input', () => {
+    const parsed = noteBodySchema.parse({
+      category: 'LOAN',
+      title: 'করিম সাহেবকে লোন দেওয়ার কথা',
+      content: 'আগামী সপ্তাহে ৫০,০০০ টাকা লোন দেওয়ার আলোচনা হয়েছে।',
+      memberId: '',
+    });
+    expect(parsed.category).toBe('LOAN');
+    expect(parsed.memberId).toBeNull();
+    expect(noteBodySchema.safeParse({ category: 'DUES', title: '   ', content: 'Test' }).success).toBe(false);
+    expect(noteBodySchema.safeParse({ category: 'INVALID', title: 'Test', content: 'Test' }).success).toBe(false);
+    expect(noteListSchema.parse({ category: 'BUSINESS', page: '2' })).toMatchObject({ category: 'BUSINESS', page: 2, pageSize: 20 });
   });
 });

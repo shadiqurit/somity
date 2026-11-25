@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'; import { useRoute, useRouter } from 'vue-router';
-import { Building2, CircleHelp, FileBarChart2, History, LayoutDashboard, LogOut, Menu, Wallet, ShieldCheck, Sprout, Users, X } from 'lucide-vue-next';
+import { Building2, CircleHelp, FileBarChart2, History, LayoutDashboard, LogOut, Menu, StickyNote, Wallet, ShieldCheck, Sprout, Users, X } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth'; import { useLocale } from '../composables/useLocale'; import { initials } from '../utils/format'; import { errorMessage } from '../services/api';
 import ThemeToggle from '../components/ui/ThemeToggle.vue';
 const auth = useAuthStore(); const route = useRoute(); const router = useRouter(); const mobileOpen = ref(false); const error = ref(''); const signingOut = ref(false); const { t, toggle, locale } = useLocale();
@@ -14,6 +14,7 @@ const links = computed(() => [
   { to: '/expenses', label: 'Expenses', icon: Wallet, permission: 'finance.read' },
   { to: '/bank', label: 'Bank', icon: Building2, permission: 'finance.read' },
   { to: '/reports', label: 'Reports', icon: FileBarChart2, permission: 'finance.read' },
+  { to: '/notes', label: 'Notes', icon: StickyNote, permission: 'notes.read' },
   { to: '/approvals', label: 'Approvals', icon: ShieldCheck, permission: 'finance.approve' },
   { to: '/activity', label: 'Activity log', icon: History },
   { to: '/societies', label: 'Societies', icon: Building2, permission: 'societies.manage' },

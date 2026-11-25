@@ -9,6 +9,7 @@ export const router = createRouter({ history: createWebHistory(import.meta.env.B
     { path: 'members', component: () => import('../modules/members/MemberList.vue'), meta: { permission: 'members.read', title: 'Members' } },
     { path: 'finance', component: () => import('../modules/finance/FinanceView.vue'), meta: { permission: 'finance.read', title: 'Finance' } },
     { path: 'reports', component: () => import('../modules/reports/ReportsView.vue'), meta: { permission: 'finance.read', title: 'Reports' } },
+    { path: 'notes', component: () => import('../views/NotesView.vue'), meta: { permission: 'notes.read', title: 'Notes' } },
     { path: 'activity', component: () => import('../views/ActivityView.vue'), meta: { title: 'Activity log' } },
     ...['loans', 'investments', 'income', 'expenses', 'bank', 'approvals'].map(section => ({ path: section, component: () => import('../modules/finance/FinanceView.vue'), props: { section }, meta: { permission: 'finance.read', title: section.charAt(0).toUpperCase() + section.slice(1) } })),
     { path: 'members/new', redirect: { path: '/members', query: { entry: 'new' } }, meta: { permission: 'members.write' } },

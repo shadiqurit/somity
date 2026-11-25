@@ -19,6 +19,15 @@ enum DocumentKind {
   OTHER
 }
 
+enum NoteCategory {
+  MEMBER
+  LOAN
+  DUES
+  BUSINESS
+  INVESTMENT
+  OTHER
+}
+
 model User {
   id                 String           @id @default(cuid()) @db.VarChar(30)
   email              String           @unique @db.VarChar(191)
@@ -34,6 +43,8 @@ model User {
   auditLogs          AuditLog[]
   financialRequests  FinancialTransaction[]
   approvalDecisions  ApprovalDecision[]
+  notesCreated       Note[]           @relation("NoteCreatedBy")
+  notesUpdated       Note[]           @relation("NoteUpdatedBy")
 
   @@map("users")
 }
@@ -122,6 +133,7 @@ model Member {
   ledgerEntries LedgerEntry[]
   loans Loan[]
   settlements MemberSettlement[]
+  notes Note[]
 
   @@unique([societyId, id])
   @@unique([societyId, memberNo])
@@ -236,6 +248,7 @@ model Society {
   financePolicy FinancePolicy?
   loans Loan[]
   investments Investment[]
+  notes Note[]
 
   @@index([isActive, name])
   @@map("societies")
@@ -472,4 +485,27 @@ model Investment {
   @@unique([societyId, id])
   @@unique([societyId, purchaseId])
   @@map("investments")
+}
+
+model Note {
+  id          String       @id @default(cuid()) @db.VarChar(30)
+  societyId   String       @db.VarChar(30)
+  category    NoteCategory @default(OTHER)
+  title       String       @db.VarChar(160)
+  content     String       @db.Text
+  memberId    String?      @db.VarChar(30)
+  createdById String       @db.VarChar(30)
+  updatedById String?      @db.VarChar(30)
+  createdAt   DateTime     @default(now()) @db.DateTime(3)
+  updatedAt   DateTime     @updatedAt @db.DateTime(3)
+  society     Society      @relation(fields: [societyId], references: [id], onDelete: Restrict)
+  member      Member?      @relation(fields: [societyId, memberId], references: [societyId, id], onDelete: Restrict)
+  createdBy   User         @relation("NoteCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy   User?        @relation("NoteUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([societyId, createdAt, id], map: "notes_society_created_idx")
+  @@index([societyId, category, createdAt, id], map: "notes_society_category_idx")
+  @@index([societyId, memberId], map: "notes_society_member_idx")
+  @@index([createdById], map: "notes_created_by_idx")
+  @@map("notes")
 }

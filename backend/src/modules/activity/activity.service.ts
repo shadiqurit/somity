@@ -22,12 +22,14 @@ export async function list(scope: Prisma.AuditLogWhereInput, { after, limit, act
   const userIds = ids('user');
   const accountIds = ids('account');
   const investmentIds = ids('investment');
-  const [members, transactions, users, accounts, investments] = await Promise.all([
+  const noteIds = ids('note');
+  const [members, transactions, users, accounts, investments, notes] = await Promise.all([
     memberIds.length ? db.member.findMany({ where: { id: { in: memberIds } }, select: { id: true, societyId: true, fullName: true, memberNo: true } }) : [],
     transactionIds.length ? db.financialTransaction.findMany({ where: { id: { in: transactionIds } }, select: { id: true, societyId: true, transactionNo: true } }) : [],
     userIds.length ? db.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } }) : [],
     accountIds.length ? db.ledgerAccount.findMany({ where: { id: { in: accountIds } }, select: { id: true, societyId: true, name: true } }) : [],
     investmentIds.length ? db.investment.findMany({ where: { id: { in: investmentIds } }, select: { id: true, societyId: true, title: true } }) : [],
+    noteIds.length ? db.note.findMany({ where: { id: { in: noteIds } }, select: { id: true, societyId: true, title: true } }) : [],
   ]);
   const labels = new Map<string, string>([
     ...members.map(row => [`member/${row.societyId}/${row.id}`, `${row.fullName} · ${row.memberNo}`] as const),
@@ -35,6 +37,7 @@ export async function list(scope: Prisma.AuditLogWhereInput, { after, limit, act
     ...users.map(row => [`user//${row.id}`, row.name] as const),
     ...accounts.map(row => [`account/${row.societyId}/${row.id}`, row.name] as const),
     ...investments.map(row => [`investment/${row.societyId}/${row.id}`, row.title] as const),
+    ...notes.map(row => [`note/${row.societyId}/${row.id}`, row.title] as const),
   ]);
   return {
     items: page.map(event => {

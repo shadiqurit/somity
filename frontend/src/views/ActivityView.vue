@@ -35,11 +35,12 @@ const labels: Record<string, string> = {
   FINANCE_REVERSAL_REQUESTED: 'Requested a reversal', FINANCE_TRANSACTION_VIEWED: 'Viewed a transaction',
   FINANCE_STATEMENT_VIEWED: 'Viewed a savings statement', FINANCE_LEDGER_VIEWED: 'Viewed the society ledger',
   FINANCE_LOAN_VIEWED: 'Viewed a loan', FINANCE_LOANS_VIEWED: 'Viewed own loan history', FINANCE_INVESTMENT_VIEWED: 'Viewed an investment',
+  NOTE_CREATED: 'Added a note', NOTE_UPDATED: 'Updated a note', NOTE_DELETED: 'Deleted a note',
 };
 const roles: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin', ADMIN: 'Admin', SOCIETY_ADMIN: 'Society Admin', ACCOUNTANT: 'Accountant', APPROVER: 'Approver', MEMBER: 'Member',
 };
-const targets: Record<string, string> = { member: 'Member', transaction: 'Transaction', user: 'User', society: 'Society', account: 'Account', finance_policy: 'Approval policy', ledger: 'Society ledger', loan: 'Loan', investment: 'Investment' };
+const targets: Record<string, string> = { member: 'Member', transaction: 'Transaction', user: 'User', society: 'Society', account: 'Account', finance_policy: 'Approval policy', ledger: 'Society ledger', loan: 'Loan', investment: 'Investment', note: 'Note' };
 const actionOptions = [{ value: '', label: 'All actions' }, ...Object.entries(labels).map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label))];
 const roleOptions = [{ value: '', label: 'All roles' }, ...Object.entries(roles).map(([value, label]) => ({ value, label }))];
 const columns = [{ key: 'createdAt', label: 'Date and time' }, { key: 'action', label: 'Action' }, { key: 'actor', label: 'Performed by' }, { key: 'target', label: 'Record' }, { key: 'society', label: 'Society' }];
