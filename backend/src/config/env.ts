@@ -9,5 +9,6 @@ const schema = z.object({
   FRONTEND_ORIGIN: z.url().default('http://localhost:5173'),
   STORAGE_DIR: z.string().default('./storage'),
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
+  FRONTEND_DIST_DIR: z.string().optional(),
 });
 export const env = schema.parse(process.env);

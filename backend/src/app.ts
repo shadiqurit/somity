@@ -4,6 +4,9 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { rateLimit } from 'express-rate-limit';
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { env } from './config/env.js';
 import { db } from './config/database.js';
 import { staffRoleCodes } from './config/permissions.js';
@@ -21,7 +24,19 @@ import { noteRouter } from './modules/notes/note.routes.js';
 export const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', env.TRUST_PROXY);
-app.use(helmet(), cors({ origin: env.FRONTEND_ORIGIN, credentials: true }), express.json({ limit: '100kb' }), cookieParser());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        'img-src': ["'self'", 'data:', 'blob:'],
+        'script-src': ["'self'", "'unsafe-inline'"],
+      },
+    },
+  }),
+  cors({ origin: env.FRONTEND_ORIGIN, credentials: true }),
+  express.json({ limit: '100kb' }),
+  cookieParser(),
+);
 app.use((_req, res, next) => { res.set('X-Request-Id', randomUUID()); res.set('Cache-Control', 'no-store'); next(); });
 app.get('/api/health', async (_req, res) => {
   await db.$queryRaw`SELECT 1`;
@@ -42,5 +57,21 @@ app.use('/api/dashboard', dashboardRouter);
 app.use('/api/finance', financeRouter);
 app.use('/api/notes', noteRouter);
 app.use('/api', uploadRouter);
+app.use('/api', (_req, res) => res.status(404).json({ error: { message: 'Endpoint not found' } }));
+const frontendDistDir = env.FRONTEND_DIST_DIR
+  ? path.resolve(env.FRONTEND_DIST_DIR)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'frontend', 'dist');
+if (env.NODE_ENV === 'production' && existsSync(path.join(frontendDistDir, 'index.html'))) {
+  app.use(express.static(frontendDistDir, {
+    setHeaders(res, filePath) {
+      if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    },
+  }));
+  app.get(/^(?!\/api(?:\/|$)).*/, (_req, res) => {
+    res.sendFile(path.join(frontendDistDir, 'index.html'));
+  });
+}
 app.use((_req, res) => res.status(404).json({ error: { message: 'Endpoint not found' } }));
 app.use(errorHandler);
