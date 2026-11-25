@@ -54,6 +54,7 @@ afterAll(async () => {
   await db.investment.deleteMany({ where: scoped });
   await db.financialTransaction.deleteMany({ where: { ...scoped, type: 'REVERSAL' } });
   await db.financialTransaction.deleteMany({ where: scoped });
+  await db.nonMemberBorrower.deleteMany({ where: scoped });
   await db.memberSettlement.deleteMany({ where: scoped });
   await db.ledgerAccount.deleteMany({ where: scoped });
   await db.financePolicy.deleteMany({ where: scoped });
@@ -736,5 +737,101 @@ describe('Phase 2 financial workflow', () => {
     await request(app).get(path).set(headers('ADMIN')).expect(422);
     await request(app).get(path).set(headers('ADMIN', otherSocietyId)).query(query).expect(404);
     await request(app).get(path).set(headers('MEMBER')).query({ ...query, scope: 'full' }).expect(403);
+  });
+
+  it('manages non-member borrowers and non-member loans without membership, deposits, or user accounts', async () => {
+    const memberCountBefore = await db.member.count({ where: { societyId } });
+    const userCountBefore = await db.user.count();
+
+    await request(app).get('/api/finance/borrowers').set(headers('MEMBER')).expect(403);
+    const created = await request(app).post('/api/finance/borrowers').set(headers('ACCOUNTANT')).send({
+      fullName: 'External Rahim',
+      phone: '01711223344',
+      identityNumber: '1990123456789',
+      address: 'Mirpur, Dhaka',
+      guarantorName: 'Karim Bhai',
+      guarantorPhone: '01811223344',
+      note: 'Neighbor business loan',
+    }).expect(201);
+    const borrowerId = created.body.id as string;
+    expect(created.body.borrowerNo).toBe('NML-0001');
+    expect(await db.member.count({ where: { societyId } })).toBe(memberCountBefore);
+    expect(await db.user.count()).toBe(userCountBefore);
+
+    // Non-members cannot deposit or withdraw, and loan disbursement cannot have both memberId and borrowerId
+    await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+      .send({ type: 'DEPOSIT', borrowerId, cashAccountId: cashId, amount: '50', effectiveDate: '2026-11-10' }).expect(422);
+    await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+      .send({ type: 'LOAN_DISBURSEMENT', memberId, borrowerId, cashAccountId: cashId, amount: '100', effectiveDate: '2026-11-10', installmentCount: 2, firstDueDate: '2026-12-10' }).expect(422);
+
+    // Disburse non-member loan
+    const disburseReq = await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+      .send({ type: 'LOAN_DISBURSEMENT', borrowerId, cashAccountId: cashId, amount: '150.00', effectiveDate: '2026-11-10', installmentCount: 3, firstDueDate: '2026-12-10', reference: 'NM-LOAN-1', note: 'Non-member loan' }).expect(201);
+    expect(disburseReq.body.member).toBeNull();
+    expect(disburseReq.body.borrower).toMatchObject({ id: borrowerId, fullName: 'External Rahim', borrowerNo: 'NML-0001' });
+    const postedDisburse = await approve(disburseReq.body.id);
+    expect(postedDisburse.status).toBe(200);
+    const nonMemberLoanId = postedDisburse.body.loanId as string;
+
+    // Filter loans by borrowerType
+    const nonMemberLoans = await request(app).get('/api/finance/loans').set(headers('ADMIN')).query({ borrowerType: 'NON_MEMBER' }).expect(200);
+    expect(nonMemberLoans.body.items).toHaveLength(1);
+    expect(nonMemberLoans.body.items[0]).toMatchObject({ id: nonMemberLoanId, principal: '150.00', outstanding: '150.00', member: null, borrower: expect.objectContaining({ id: borrowerId, fullName: 'External Rahim' }) });
+    const memberLoans = await request(app).get('/api/finance/loans').set(headers('ADMIN')).query({ borrowerType: 'MEMBER' }).expect(200);
+    expect(memberLoans.body.items.every((row: { member: unknown }) => row.member !== null)).toBe(true);
+
+    // Member cannot see non-member loan
+    await request(app).get(`/api/finance/loans/me/${nonMemberLoanId}`).set(headers('MEMBER')).expect(404);
+    const ownLoans = await request(app).get('/api/finance/loans/me').set(headers('MEMBER')).expect(200);
+    expect(ownLoans.body.items.map((row: { id: string }) => row.id)).not.toContain(nonMemberLoanId);
+
+    // Repay non-member loan
+    const repay1 = await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+      .send({ type: 'LOAN_REPAYMENT', loanId: nonMemberLoanId, cashAccountId: cashId, amount: '50.00', effectiveDate: '2026-11-10', note: 'First installment' }).expect(201);
+    expect(repay1.body.borrower?.id).toBe(borrowerId);
+    expect((await approve(repay1.body.id)).status).toBe(200);
+
+    const detail = await request(app).get(`/api/finance/borrowers/${borrowerId}`).set(headers('ADMIN')).expect(200);
+    expect(detail.body).toMatchObject({ fullName: 'External Rahim', disbursed: '150.00', repaid: '50.00', outstanding: '100.00', loanCount: 1 });
+    expect(detail.body.transactions).toHaveLength(2);
+
+    // Settle remaining balance
+    const repay2 = await request(app).post('/api/finance/transactions').set(headers('ACCOUNTANT')).set('Idempotency-Key', randomUUID())
+      .send({ type: 'LOAN_REPAYMENT', loanId: nonMemberLoanId, cashAccountId: cashId, amount: '100.00', effectiveDate: '2026-11-10', note: 'Final payment' }).expect(201);
+    expect((await approve(repay2.body.id)).status).toBe(200);
+    const settledLoan = await request(app).get(`/api/finance/loans/${nonMemberLoanId}`).set(headers('ADMIN')).expect(200);
+    expect(settledLoan.body).toMatchObject({ outstanding: '0.00', status: 'SETTLED' });
+
+    // Society isolation
+    await request(app).get(`/api/finance/borrowers/${borrowerId}`).set(headers('ADMIN', otherSocietyId)).expect(404);
+    const updated = await request(app).patch(`/api/finance/borrowers/${borrowerId}`).set(headers('ACCOUNTANT')).send({ phone: '01799887766' }).expect(200);
+    expect(updated.body.phone).toBe('01799887766');
+  });
+
+  it('serves member-scoped loan summary and own transaction reports without exposing other records', async () => {
+    const loanSummary = await request(app).get('/api/finance/loan-summary/me').set(headers('MEMBER')).expect(200);
+    expect(loanSummary.body).toMatchObject({
+      disbursed: expect.stringMatching(/^\d+\.\d{2}$/),
+      repaid: expect.stringMatching(/^\d+\.\d{2}$/),
+      outstanding: expect.stringMatching(/^\d+\.\d{2}$/),
+      totalLoans: expect.any(Number),
+      activeLoans: expect.any(Number),
+      settledLoans: expect.any(Number),
+    });
+
+    for (const kind of ['member-statement', 'savings', 'loans', 'loan-disbursements', 'loan-repayments'] as const) {
+      const res = await request(app)
+        .get(`/api/finance/reports/me/${kind}`)
+        .set(headers('MEMBER'))
+        .query({ scope: 'full', memberId: 'other-member-id' })
+        .expect(200);
+      expect(res.body.member?.id).toBe(memberId);
+      expect(Array.isArray(res.body.items)).toBe(true);
+      expect(Array.isArray(res.body.summary)).toBe(true);
+    }
+
+    await request(app).get('/api/finance/reports/me/expenses').set(headers('MEMBER')).expect(422);
+    await request(app).get('/api/finance/reports/me/bank').set(headers('MEMBER')).expect(422);
+    await request(app).get('/api/finance/reports/member-statement').set(headers('MEMBER')).query({ memberId }).expect(403);
   });
 });

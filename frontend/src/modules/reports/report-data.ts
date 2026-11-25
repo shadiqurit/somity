@@ -75,6 +75,12 @@ export function reportCell(row: ReportRow, column: Column) {
   return column.money ? bdt(value).slice(2) : value || '—';
 }
 
+export interface ReportGeneratedBy {
+  name: string;
+  email: string;
+  role?: string;
+}
+
 export interface ReportDocument {
   data: ReportData;
   kind: ReportKind;
@@ -82,4 +88,6 @@ export interface ReportDocument {
   society: string;
   period: string;
   filename: string;
+  generatedBy?: ReportGeneratedBy;
+  generatedAt?: string;
 }

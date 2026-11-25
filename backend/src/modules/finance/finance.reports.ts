@@ -20,9 +20,26 @@ async function productBalance(tx: Tx, societyId: string, kind: AccountKind, scop
 }
 export async function loans(societyId: string, input: FinanceListInput, ownMemberId?: string, detailId?: string) {
   return db.$transaction(async tx => {
-    const where = { societyId, ...(ownMemberId || input.memberId ? { memberId: ownMemberId ?? input.memberId } : {}), ...(detailId ? { id: detailId } : {}) };
+    const where: Prisma.LoanWhereInput = {
+      societyId,
+      ...(ownMemberId || input.memberId ? { memberId: ownMemberId ?? input.memberId } : {}),
+      ...(input.borrowerId && !ownMemberId ? { borrowerId: input.borrowerId } : {}),
+      ...(!ownMemberId && input.borrowerType === 'MEMBER' ? { memberId: { not: null } } : {}),
+      ...(!ownMemberId && input.borrowerType === 'NON_MEMBER' ? { borrowerId: { not: null } } : {}),
+      ...(detailId ? { id: detailId } : {}),
+    };
     const total = await tx.loan.count({ where });
-    const rows = await tx.loan.findMany({ where, skip: detailId ? 0 : (input.page - 1) * input.pageSize, take: detailId ? 1 : input.pageSize, orderBy: { id: 'desc' }, include: { member: { select: { fullName: true, memberNo: true } }, disbursement: { select: { effectiveDate: true, transactionNo: true, reversals: { where: { status: 'POSTED' }, select: { id: true } } } } } });
+    const rows = await tx.loan.findMany({
+      where,
+      skip: detailId ? 0 : (input.page - 1) * input.pageSize,
+      take: detailId ? 1 : input.pageSize,
+      orderBy: { id: 'desc' },
+      include: {
+        member: { select: { id: true, fullName: true, memberNo: true } },
+        borrower: { select: { id: true, fullName: true, borrowerNo: true, phone: true, identityNumber: true, address: true, guarantorName: true, guarantorPhone: true } },
+        disbursement: { select: { effectiveDate: true, transactionNo: true, reversals: { where: { status: 'POSTED' }, select: { id: true } } } },
+      },
+    });
     if (detailId && !rows.length) throw new AppError(404, 'Loan not found');
     const items = await Promise.all(rows.map(async loan => {
       const outstanding = await productBalance(tx, societyId, 'LOAN_RECEIVABLE', { loanId: loan.id });
@@ -57,6 +74,57 @@ export async function loanSummary(societyId: string) {
       repaid: repaid.toFixed(2),
       outstanding: disbursed.minus(repaid).toFixed(2),
       pending,
+    };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
+export async function memberLoanSummary(societyId: string, memberId: string) {
+  return db.$transaction(async tx => {
+    const [disbursed, repaymentBalance, pending, memberLoans] = await Promise.all([
+      productBalance(tx, societyId, 'LOAN_RECEIVABLE', movements('LOAN_DISBURSEMENT'), memberId),
+      productBalance(tx, societyId, 'LOAN_RECEIVABLE', movements('LOAN_REPAYMENT'), memberId),
+      tx.financialTransaction.count({ where: {
+        societyId, memberId, status: 'PENDING',
+        OR: [{ type: { in: ['LOAN_DISBURSEMENT', 'LOAN_REPAYMENT'] } }, { type: 'REVERSAL', loanId: { not: null } }],
+      } }),
+      tx.loan.findMany({
+        where: { societyId, memberId },
+        include: { disbursement: { select: { reversals: { where: { status: 'POSTED' }, select: { id: true } } } } },
+      }),
+    ]);
+    let activeLoans = 0;
+    let settledLoans = 0;
+    let nextDueDate: string | null = null;
+    for (const loan of memberLoans) {
+      if (loan.disbursement.reversals.length > 0) continue;
+      const outstanding = await productBalance(tx, societyId, 'LOAN_RECEIVABLE', { loanId: loan.id });
+      if (outstanding.isZero()) {
+        settledLoans += 1;
+        continue;
+      }
+      activeLoans += 1;
+      let remainingPaid = loan.principal.minus(outstanding);
+      const schedule = principalSchedule(loan.principal.toFixed(2), loan.installmentCount, loan.firstDueDate.toISOString().slice(0, 10));
+      for (const row of schedule) {
+        const due = new Prisma.Decimal(row.amount);
+        const allocated = Prisma.Decimal.min(remainingPaid, due);
+        remainingPaid = remainingPaid.minus(allocated);
+        if (!due.minus(allocated).isZero()) {
+          if (!nextDueDate || row.dueDate < nextDueDate) nextDueDate = row.dueDate;
+          break;
+        }
+      }
+    }
+    const repaid = zero().minus(repaymentBalance);
+    return {
+      disbursed: disbursed.toFixed(2),
+      repaid: repaid.toFixed(2),
+      outstanding: disbursed.minus(repaid).toFixed(2),
+      pending,
+      totalLoans: activeLoans + settledLoans,
+      activeLoans,
+      settledLoans,
+      nextDueDate,
     };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
@@ -251,6 +319,7 @@ function accountReport(societyId: string, accountId: string, input: ReportQuery,
         member: { select: { fullName: true, memberNo: true } },
         transaction: { select: {
           effectiveDate: true, transactionNo: true, type: true, note: true, reference: true, details: true,
+          borrower: { select: { fullName: true, borrowerNo: true } },
           investment: { select: { title: true } }, reversalOf: { select: { type: true, transactionNo: true } },
           entries: {
             where: { accountId: { not: account.id }, account: { kind: { in: cashAccountKinds } } },
@@ -267,7 +336,7 @@ function accountReport(societyId: string, accountId: string, input: ReportQuery,
       balance = balance.plus(debit).minus(credit);
       const { reversalOf, type } = transaction;
       const otherAccount = transaction.entries[0]?.account;
-      const subject = member ? `${member.memberNo} · ${member.fullName}` : transaction.investment?.title;
+      const subject = member ? `${member.memberNo} · ${member.fullName}` : transaction.borrower ? `${transaction.borrower.borrowerNo} · ${transaction.borrower.fullName} (Non-member)` : transaction.investment?.title;
       const transferAccount = otherAccount ? `${otherAccount.name} · ${otherAccount.code}` : undefined;
       const expense = (reversalOf?.type ?? type) === 'EXPENSE' ? transaction.details as ProductDetails | null : null;
       return {
@@ -377,6 +446,7 @@ export async function financialReport(societyId: string, kind: ReturnType<typeof
         member: { select: { fullName: true, memberNo: true } },
         transaction: { select: {
           effectiveDate: true, transactionNo: true, type: true, note: true, reference: true, details: true,
+          borrower: { select: { fullName: true, borrowerNo: true } },
           investment: { select: { title: true } }, reversalOf: { select: { type: true, transactionNo: true } },
         } },
       },
@@ -385,7 +455,11 @@ export async function financialReport(societyId: string, kind: ReturnType<typeof
     const items = rows.map(({ id, debit, credit, account, member, transaction }) => {
       const { reversalOf, type } = transaction;
       const movement = movementLabel(type, reversalOf?.type);
-      const subject = member && !reportMember ? `${member.memberNo} · ${member.fullName}` : transaction.investment?.title;
+      const subject = member && !reportMember
+        ? `${member.memberNo} · ${member.fullName}`
+        : transaction.borrower
+          ? `${transaction.borrower.borrowerNo} · ${transaction.borrower.fullName} (Non-member)`
+          : transaction.investment?.title;
       const base = account.kind === 'INVESTMENT_ASSET' ? 'Principal' : account.kind === 'INVESTMENT_INCOME' ? 'Profit' : '';
       const expense = kind === 'expenses' ? transaction.details as ProductDetails | null : null;
       const amount = creditPositive(account.kind) || isRepaymentReport ? credit.minus(debit) : debit.minus(credit);

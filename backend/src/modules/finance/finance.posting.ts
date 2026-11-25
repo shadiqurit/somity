@@ -43,8 +43,9 @@ export async function productLines(tx: Tx, item: FinancialTransaction) {
   } else if (item.type === 'DEPOSIT') { incoming(item.cashAccountId); out(await system('MEMBER_SAVINGS')); }
   else if (item.type === 'WITHDRAWAL') { incoming(await system('MEMBER_SAVINGS')); out(item.cashAccountId); }
   else if (item.type === 'LOAN_DISBURSEMENT') {
+    if (Boolean(item.memberId) === Boolean(item.borrowerId)) throw new AppError(422, 'Loan disbursement must belong to either a member or a non-member borrower');
     principalSchedule(item.amount.toFixed(2), details.installmentCount!, details.firstDueDate!);
-    const loan = await tx.loan.create({ data: { societyId: item.societyId, memberId: item.memberId!, disbursementId: item.id, principal: item.amount, installmentCount: details.installmentCount!, firstDueDate: new Date(details.firstDueDate!) } });
+    const loan = await tx.loan.create({ data: { societyId: item.societyId, memberId: item.memberId ?? null, borrowerId: item.borrowerId ?? null, disbursementId: item.id, principal: item.amount, installmentCount: details.installmentCount!, firstDueDate: new Date(details.firstDueDate!) } });
     await tx.financialTransaction.update({ where: { id: item.id }, data: { loanId: loan.id } });
     incoming(await system('LOAN_RECEIVABLE')); out(item.cashAccountId);
   } else if (item.type === 'LOAN_REPAYMENT') { incoming(item.cashAccountId); out(await system('LOAN_RECEIVABLE')); }

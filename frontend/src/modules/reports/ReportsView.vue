@@ -8,7 +8,7 @@ import SummaryCard from '../../components/ui/SummaryCard.vue';
 import { useLocale } from '../../composables/useLocale';
 import { api, errorMessage } from '../../services/api';
 import { useAuthStore } from '../../stores/auth';
-import { date } from '../../utils/format';
+import { date, dateTime } from '../../utils/format';
 import { bdt } from '../finance/types';
 import ReportAccountPicker from './ReportAccountPicker.vue';
 import ReportMemberPicker from './ReportMemberPicker.vue';
@@ -160,7 +160,17 @@ async function exportReport(format: 'excel' | 'pdf') {
       const { downloadWorkbook } = await import('./report-workbook');
       if (!request.signal.aborted && auth.user?.societyId === society.id) await downloadWorkbook({ ...report, data });
     } else {
-      printed.value = { ...report, data };
+      const currentUser = auth.user;
+      printed.value = {
+        ...report,
+        data,
+        generatedBy: currentUser ? {
+          name: currentUser.name,
+          email: currentUser.email,
+          role: currentUser.roles[0]?.replaceAll('_', ' '),
+        } : undefined,
+        generatedAt: `${dateTime(new Date())} (Asia/Dhaka)`,
+      };
       originalTitle = document.title;
       document.title = report.filename;
       await nextTick();

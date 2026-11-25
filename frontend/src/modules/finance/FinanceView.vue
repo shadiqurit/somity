@@ -6,6 +6,7 @@ import { useAuthStore } from '../../stores/auth';
 import { useLocale } from '../../composables/useLocale';
 import { date } from '../../utils/format';
 import ProductReports from './ProductReports.vue';
+import NonMemberBorrowers from './NonMemberBorrowers.vue';
 import TransactionLog from './TransactionLog.vue';
 import { bdt, todayDhaka, type Account, type FinancialTransaction, type FinanceSummary, type IncomeSummary, type LoanSummary, type InvestmentSummary, type ExpenseSummary, type LedgerLine, type Policy } from './types';
 import AppButton from '../../components/ui/AppButton.vue';
@@ -33,10 +34,11 @@ const transactionLabels = {
   EXPENSE: 'Expense', TRANSFER: 'Transfer', REVERSAL: 'Reversal',
 };
 type TransactionType = keyof typeof transactionLabels;
-type EntryPreset = { type: string; loanId?: string; investmentId?: string; label?: string };
+type EntryPreset = { type: string; loanId?: string; borrowerId?: string; investmentId?: string; label?: string };
 const props = defineProps<{ section?: Section }>();
 const { t } = useLocale();
 const section = computed(() => props.section ?? 'finance');
+const loansView = ref<'loans' | 'borrowers'>('loans');
 const incomeSummary = ref<IncomeSummary>();
 const loanSummary = ref<LoanSummary>();
 const investmentSummary = ref<InvestmentSummary>();
@@ -64,9 +66,16 @@ const status = ref(props.section === 'approvals' ? 'PENDING' : ''); const type =
 const entryOpen = ref(false); const accountOpen = ref(false); const policyOpen = ref(false); const selected = ref<FinancialTransaction>(); const detailLoading = ref(false);
 const deleteOpen = ref(false); const deleteError = ref('');
 const decision = ref('APPROVE'); const comment = ref(''); const reverseOpen = ref(false); const reversalNote = ref(''); const reversalDate = ref(todayDhaka());
-const blankForm = () => ({ type: '', memberId: '', cashAccountId: '', amount: '', effectiveDate: todayDhaka(), reference: '', note: '', loanId: '', investmentId: '', installmentCount: '12', firstDueDate: todayDhaka(), title: '', counterparty: '', principalReturned: '0.00', profit: '0.00', category: '', payee: '', destinationAccountId: '' });
+const blankForm = () => ({ type: '', borrowerKind: 'MEMBER' as 'MEMBER' | 'NON_MEMBER', memberId: '', borrowerId: '', cashAccountId: '', amount: '', effectiveDate: todayDhaka(), reference: '', note: '', loanId: '', investmentId: '', installmentCount: '12', firstDueDate: todayDhaka(), title: '', counterparty: '', principalReturned: '0.00', profit: '0.00', category: '', payee: '', destinationAccountId: '' });
 const form = reactive(blankForm());
-const needsMember = computed(() => ['DEPOSIT','WITHDRAWAL','LOAN_DISBURSEMENT'].includes(form.type));
+const needsMember = computed(() => ['DEPOSIT', 'WITHDRAWAL'].includes(form.type) || (form.type === 'LOAN_DISBURSEMENT' && form.borrowerKind === 'MEMBER'));
+const needsBorrower = computed(() => form.type === 'LOAN_DISBURSEMENT' && form.borrowerKind === 'NON_MEMBER');
+const borrowerSearch = ref('');
+const borrowerOptions = ref<{ label: string; value: string }[]>([]);
+const searchingBorrowers = ref(false);
+const quickBorrowerOpen = ref(false);
+const quickBorrowerBusy = ref(false);
+const quickBorrower = reactive({ fullName: '', phone: '', identityNumber: '', address: '', guarantorName: '', guarantorPhone: '' });
 const fullInvestmentReturn = computed(() => form.type === 'INVESTMENT_RETURN' && section.value !== 'income');
 watch(() => [form.principalReturned, form.profit, fullInvestmentReturn.value], () => { if(!fullInvestmentReturn.value) return; try { const cents = (v:string) => {if(!/^(0|[1-9]\d*)(\.\d{1,2})?$/.test(v))throw new Error();const [whole='0',fraction='']=v.split('.');return BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0'));};const total=cents(form.principalReturned)+cents(form.profit);form.amount=String(total/100n)+'.'+String(total%100n).padStart(2,'0'); } catch { form.amount=''; } });
 const accountForm = reactive({ code: '', name: '', kind: 'CASH', bankName: '', accountNumberLast4: '' });
@@ -75,7 +84,7 @@ const memberSearch = ref(''); const memberOptions = ref<{ label: string; value: 
 let entryKey = ''; let entrySignature = ''; let reverseKey = ''; let reverseSignature = '';
 let loadSequence = 0;
 const cashOptions = computed(() => [{ label: 'Choose a cash or bank account', value: '' }, ...accounts.value.filter(a => ['CASH','BANK'].includes(a.kind) && a.isActive).map(a => ({ label: `${a.name} · ${bdt(a.balance)}`, value: a.id }))]);
-const columns = [{ key: 'transactionNo', label: 'Transaction' }, { key: 'member', label: 'Member' }, { key: 'effectiveDate', label: 'Date' }, { key: 'amount', label: 'Amount' }, { key: 'status', label: 'Status' }, { key: 'actions', label: 'Details' }];
+const columns = [{ key: 'transactionNo', label: 'Transaction' }, { key: 'member', label: 'Member / Borrower' }, { key: 'effectiveDate', label: 'Date' }, { key: 'amount', label: 'Amount' }, { key: 'status', label: 'Status' }, { key: 'actions', label: 'Details' }];
 const incomeColumns = columns.map(column => column.key === 'member' ? { key: 'note', label: 'Note' } : column.key === 'amount' ? { ...column, label: 'Income amount' } : column);
 const ledgerColumns = [{ key: 'effectiveDate', label: 'Date' }, { key: 'transaction', label: 'Transaction / member' }, { key: 'account', label: 'Account' }, { key: 'debit', label: 'Debit' }, { key: 'credit', label: 'Credit' }];
 const accountColumns = [{ key: 'code', label: 'Code' }, { key: 'name', label: 'Account' }, { key: 'kind', label: 'Kind' }, { key: 'balance', label: 'Posted balance' }];
@@ -125,18 +134,78 @@ async function searchMembers() {
     if (memberRequest === request) searching.value = false;
   }
 }
+let borrowerRequest: AbortController | undefined;
+async function searchBorrowers() {
+  borrowerRequest?.abort();
+  const request = new AbortController();
+  borrowerRequest = request;
+  searchingBorrowers.value = true;
+  actionError.value = '';
+  try {
+    const { data } = await api.get('/finance/borrowers', { params: { activeOnly: true, search: borrowerSearch.value, pageSize: 20 }, signal: request.signal });
+    if (request.signal.aborted) return;
+    const options = data.items.map((b: { id: string; fullName: string; borrowerNo: string; phone: string }) => ({ label: `${b.fullName} · ${b.borrowerNo} · ${b.phone}`, value: b.id }));
+    if (entryPreset?.borrowerId && !options.some((o: { value: string }) => o.value === entryPreset?.borrowerId)) {
+      options.unshift({ label: entryPreset.label ?? entryPreset.borrowerId, value: entryPreset.borrowerId });
+    }
+    borrowerOptions.value = [{ label: 'Choose a non-member borrower', value: '' }, ...options];
+  } catch (e) {
+    if (!request.signal.aborted) actionError.value = errorMessage(e);
+  } finally {
+    if (borrowerRequest === request) searchingBorrowers.value = false;
+  }
+}
+async function createQuickBorrower() {
+  quickBorrowerBusy.value = true;
+  actionError.value = '';
+  try {
+    const { data } = await api.post('/finance/borrowers', {
+      fullName: quickBorrower.fullName.trim(),
+      phone: quickBorrower.phone.trim(),
+      identityNumber: quickBorrower.identityNumber.trim(),
+      address: quickBorrower.address.trim(),
+      guarantorName: quickBorrower.guarantorName.trim(),
+      guarantorPhone: quickBorrower.guarantorPhone.trim(),
+    });
+    const option = { label: `${data.fullName} · ${data.borrowerNo} · ${data.phone}`, value: data.id };
+    borrowerOptions.value = [{ label: 'Choose a non-member borrower', value: '' }, option, ...borrowerOptions.value.filter(o => o.value && o.value !== data.id)];
+    form.borrowerId = data.id;
+    Object.assign(quickBorrower, { fullName: '', phone: '', identityNumber: '', address: '', guarantorName: '', guarantorPhone: '' });
+    quickBorrowerOpen.value = false;
+    reportRevision.value++;
+  } catch (e) {
+    actionError.value = errorMessage(e);
+  } finally {
+    quickBorrowerBusy.value = false;
+  }
+}
 function openEntry(preset?: EntryPreset) {
   const initial = preset ? entryOptions.value.find(option => option.value === preset.type) : entryOptions.value[0];
   if (!initial) return;
   entryPreset = preset;
-  Object.assign(form, blankForm(), { type: initial.value, loanId: preset?.loanId ?? '', investmentId: preset?.investmentId ?? '' });
-  memberSearch.value = ''; memberOptions.value = []; productOptions.value = [];
+  Object.assign(form, blankForm(), {
+    type: initial.value,
+    borrowerKind: preset?.borrowerId ? 'NON_MEMBER' : 'MEMBER',
+    borrowerId: preset?.borrowerId ?? '',
+    loanId: preset?.loanId ?? '',
+    investmentId: preset?.investmentId ?? '',
+  });
+  memberSearch.value = ''; memberOptions.value = [];
+  borrowerSearch.value = ''; borrowerOptions.value = preset?.borrowerId ? [{ label: 'Choose a non-member borrower', value: '' }, { label: preset.label ?? preset.borrowerId, value: preset.borrowerId }] : [];
+  quickBorrowerOpen.value = false;
+  Object.assign(quickBorrower, { fullName: '', phone: '', identityNumber: '', address: '', guarantorName: '', guarantorPhone: '' });
+  productOptions.value = [];
   entryKey = newIdempotencyKey(); entrySignature = ''; actionError.value = ''; entryOpen.value = true;
 }
 watch([entryOpen, needsMember], ([open, member], _, onCleanup) => {
   if (!open || !member) return;
   onCleanup(() => memberRequest?.abort());
   if (!memberOptions.value.length) void searchMembers();
+});
+watch([entryOpen, needsBorrower], ([open, borrower], _, onCleanup) => {
+  if (!open || !borrower) return;
+  onCleanup(() => borrowerRequest?.abort());
+  if (borrowerOptions.value.length <= 1) void searchBorrowers();
 });
 watch([entryOpen, () => form.type], async ([open, currentType], _, onCleanup) => {
   if (!open || (currentType !== 'LOAN_REPAYMENT' && currentType !== 'INVESTMENT_RETURN')) return;
@@ -148,13 +217,16 @@ watch([entryOpen, () => form.type], async ([open, currentType], _, onCleanup) =>
   const presetOption = presetId ? { label: entryPreset?.label ?? presetId, value: presetId } : undefined;
   productOptions.value = presetOption ? [placeholder, presetOption] : [placeholder];
   try {
-    const { data } = await api.get<{ items: { id: string; title?: string; member?: { fullName: string }; outstanding: string; status: string }[] }>(
+    const { data } = await api.get<{ items: { id: string; title?: string; member?: { fullName: string } | null; borrower?: { fullName: string; borrowerNo: string } | null; outstanding: string; status: string }[] }>(
       isLoan ? '/finance/loans' : '/finance/investments', { params: { pageSize: 100 }, signal: request.signal },
     );
     if (request.signal.aborted) return;
     const options = data.items
       .filter(item => isLoan ? item.status === 'ACTIVE' : item.status !== 'CANCELLED')
-      .map(item => ({ label: `${item.member?.fullName ?? item.title} · ${bdt(item.outstanding)}`, value: item.id }));
+      .map(item => ({
+        label: `${item.member?.fullName ?? (item.borrower ? `${item.borrower.fullName} (Non-member)` : item.title)} · ${bdt(item.outstanding)}`,
+        value: item.id,
+      }));
     if (presetOption && !options.some(option => option.value === presetOption.value)) options.push(presetOption);
     productOptions.value = [placeholder, ...options];
   } catch (e) {
@@ -165,6 +237,7 @@ async function saveEntry() {
   const payload: Record<string, unknown> = {
     type: form.type,
     memberId: needsMember.value ? form.memberId : null,
+    borrowerId: needsBorrower.value ? form.borrowerId : null,
     cashAccountId: form.cashAccountId,
     amount: form.amount,
     effectiveDate: form.effectiveDate,
@@ -316,9 +389,15 @@ onMounted(() => load());
         <small v-if="tab === 'income' && row.investment" class="finance-cell-note">{{ row.investment.title }}</small>
       </template>
       <template #cell-member="{ row }">
-        <RouterLink v-if="row.member" :to="`/members/${row.member.id}`" class="text-link">{{ row.member.fullName }}</RouterLink>
+        <template v-if="row.member">
+          <RouterLink :to="`/members/${row.member.id}`" class="text-link">{{ row.member.fullName }}</RouterLink>
+          <small class="finance-cell-note">{{ row.member.memberNo }}</small>
+        </template>
+        <template v-else-if="row.borrower">
+          <strong>{{ row.borrower.fullName }}</strong> <span class="borrower-tag">{{ t('Non-member') }}</span>
+          <small class="finance-cell-note">{{ row.borrower.borrowerNo }} · {{ row.borrower.phone }}</small>
+        </template>
         <span v-else>Society transaction</span>
-        <small class="finance-cell-note">{{ row.member?.memberNo }}</small>
       </template>
       <template #cell-note="{ row }"><span class="preserve-lines">{{ row.note || '—' }}</span></template>
       <template #cell-effectiveDate="{ row }">{{ date(row.effectiveDate) }}</template>
@@ -330,9 +409,15 @@ onMounted(() => load());
       <template #cell-actions="{ row }"><AppButton variant="ghost" :loading="detailLoading" @click="showDetails(row.id)">Review</AppButton></template>
       <template #empty>No transactions match these filters.</template>
     </AppTable>
-    <AppTable v-else-if="tab === 'ledger'" :rows="ledgerRows" :columns="ledgerColumns" :page="page" :pages="pages" :total="total" :loading="loading" @page="load"><template #cell-effectiveDate="{ row }">{{ date(row.transaction.effectiveDate) }}</template><template #cell-transaction="{ row }"><strong>{{ row.transaction.transactionNo }}</strong><small class="finance-cell-note">{{ row.member?.fullName || 'Society' }} · {{ row.transaction.type }}</small></template><template #cell-account="{ row }">{{ row.account.name }}<small class="finance-cell-note">{{ row.account.code }}</small></template><template #cell-debit="{ row }">{{ bdt(row.debit) }}</template><template #cell-credit="{ row }">{{ bdt(row.credit) }}</template><template #empty>No posted ledger entries in this period.</template></AppTable>
+    <AppTable v-else-if="tab === 'ledger'" :rows="ledgerRows" :columns="ledgerColumns" :page="page" :pages="pages" :total="total" :loading="loading" @page="load"><template #cell-effectiveDate="{ row }">{{ date(row.transaction.effectiveDate) }}</template><template #cell-transaction="{ row }"><strong>{{ row.transaction.transactionNo }}</strong><small class="finance-cell-note">{{ row.member?.fullName || (row.transaction.borrower ? `${row.transaction.borrower.fullName} (Non-member)` : 'Society') }} · {{ row.transaction.type }}</small></template><template #cell-account="{ row }">{{ row.account.name }}<small class="finance-cell-note">{{ row.account.code }}</small></template><template #cell-debit="{ row }">{{ bdt(row.debit) }}</template><template #cell-credit="{ row }">{{ bdt(row.credit) }}</template><template #empty>No posted ledger entries in this period.</template></AppTable>
     <template v-else><div class="panel-heading"><div><h2>Cash & bank accounts</h2><p>Balances come from approved ledger entries.</p></div><AppButton v-if="auth.can('finance.settings')" @click="openAccount"><Plus :size="18" /> Add account</AppButton></div><AppTable :rows="accounts" :columns="accountColumns" :loading="loading"><template #cell-name="{ row }"><strong>{{ row.name }}</strong><small v-if="row.bankName" class="finance-cell-note">{{ row.bankName }} {{ row.accountNumberLast4 ? `· ending ${row.accountNumberLast4}` : '' }}</small></template><template #cell-balance="{ row }">{{ bdt(row.balance) }}</template><template #empty>Add your first cash or bank account to start recording transactions.</template></AppTable></template>
-  </section><ProductReports v-if="tab === 'loans' || tab === 'investments' || tab === 'bank'" :kind="tab" :refresh="reportRevision" @entry="openEntry" /><p class="under-table-note">Balances update after final approval. To correct a posted transaction, request a reversal and submit a new entry.</p>
+  </section>
+  <div v-if="tab === 'loans'" class="finance-tabs loans-view-tabs" aria-label="Loans view">
+    <AppButton :variant="loansView === 'loans' ? 'primary' : 'ghost'" @click="loansView = 'loans'">{{ t('Loans') }}</AppButton>
+    <AppButton :variant="loansView === 'borrowers' ? 'primary' : 'ghost'" @click="loansView = 'borrowers'">{{ t('Non-member borrowers') }}</AppButton>
+  </div>
+  <NonMemberBorrowers v-if="tab === 'loans' && loansView === 'borrowers'" :refresh="reportRevision" @entry="openEntry" />
+  <ProductReports v-else-if="tab === 'loans' || tab === 'investments' || tab === 'bank'" :kind="tab" :refresh="reportRevision" @entry="openEntry" /><p class="under-table-note">Balances update after final approval. To correct a posted transaction, request a reversal and submit a new entry.</p>
 
   <AppModal :open="entryOpen" title="New transaction" description="The ledger updates after final approval." :busy="busy" @close="entryOpen = false">
     <AppForm :busy="busy" :error="actionError" @submit="saveEntry">
@@ -340,11 +425,43 @@ onMounted(() => load());
         <AppSelect v-model="form.type" label="Transaction type" :options="entryOptions" required />
         <AppInput v-model="form.effectiveDate" label="Effective date" type="date" :max="todayDhaka()" required />
       </div>
+      <AppSelect
+        v-if="form.type === 'LOAN_DISBURSEMENT'"
+        v-model="form.borrowerKind"
+        label="Borrower type"
+        :options="[{ label: 'Member', value: 'MEMBER' }, { label: t('Non-member') + ' (no membership / no account)', value: 'NON_MEMBER' }]"
+      />
       <div v-if="needsMember" class="finance-member-search">
         <AppInput v-model="memberSearch" label="Find member by name or number" />
         <AppButton variant="secondary" :loading="searching" @click="searchMembers">Search</AppButton>
       </div>
       <AppSelect v-if="needsMember" v-model="form.memberId" label="Member" :options="memberOptions" required />
+      <template v-if="needsBorrower">
+        <div class="finance-member-search">
+          <AppInput v-model="borrowerSearch" :label="t('Search non-member borrowers')" placeholder="Name, phone, or borrower no." />
+          <AppButton variant="secondary" :loading="searchingBorrowers" @click="searchBorrowers">Search</AppButton>
+          <AppButton variant="ghost" @click="quickBorrowerOpen = !quickBorrowerOpen">{{ quickBorrowerOpen ? 'Close' : '+ New' }}</AppButton>
+        </div>
+        <div v-if="quickBorrowerOpen" class="quick-borrower-box">
+          <strong>{{ t('Add non-member borrower') }}</strong>
+          <div class="form-grid">
+            <AppInput v-model="quickBorrower.fullName" label="Full name" maxlength="120" />
+            <AppInput v-model="quickBorrower.phone" label="Phone number" maxlength="25" />
+          </div>
+          <div class="form-grid">
+            <AppInput v-model="quickBorrower.identityNumber" label="NID / ID (optional)" maxlength="40" />
+            <AppInput v-model="quickBorrower.address" label="Address (optional)" maxlength="500" />
+          </div>
+          <div class="form-grid">
+            <AppInput v-model="quickBorrower.guarantorName" label="Guarantor name (optional)" maxlength="120" />
+            <AppInput v-model="quickBorrower.guarantorPhone" label="Guarantor phone (optional)" maxlength="25" />
+          </div>
+          <div class="button-row">
+            <AppButton variant="secondary" :loading="quickBorrowerBusy" :disabled="!quickBorrower.fullName.trim() || !quickBorrower.phone.trim()" @click="createQuickBorrower">Save &amp; select borrower</AppButton>
+          </div>
+        </div>
+        <AppSelect v-model="form.borrowerId" :label="t('Non-member') + ' borrower'" :options="borrowerOptions" required />
+      </template>
       <template v-if="form.type === 'LOAN_DISBURSEMENT'">
         <AppInput v-model="form.installmentCount" label="Number of monthly installments" type="number" min="1" max="600" required />
         <AppInput v-model="form.firstDueDate" label="First installment date" type="date" :min="form.effectiveDate" required />
@@ -382,7 +499,7 @@ onMounted(() => load());
 
   <AppModal :open="policyOpen" title="Approval policy" description="Changes apply to new requests. Existing requests keep their original rules." :busy="busy" @close="policyOpen = false"><AppForm :busy="busy" :error="actionError" @submit="savePolicy"><AppSelect v-model="policyForm.requiredApprovals" label="Required approvals" :options="[{label:'One approver',value:'1'},{label:'Two distinct approvers',value:'2'}]" /><label class="finance-checkbox"><input v-model="policyForm.allowSelfApproval" type="checkbox" /> Allow authorized requesters to approve their own requests</label><p class="muted small-text">Admin and Approver roles can decide requests. Accountant can submit requests. Two approvals always require two different people.</p><div class="form-actions"><AppButton variant="secondary" @click="policyOpen = false">Cancel</AppButton><AppButton type="submit" :loading="busy">Save policy</AppButton></div></AppForm></AppModal>
 
-  <AppModal :open="!!selected" :title="selected?.transactionNo ?? 'Transaction details'" :busy="busy" size="wide" @close="selected = undefined"><template v-if="selected"><div v-if="actionError" class="alert error" role="alert">{{ actionError }}</div><div class="finance-detail-heading"><div><span class="eyebrow">{{ transactionLabel(selected) }}</span><h2>{{ tab === 'income' ? incomeAmount(selected) : bdt(selected.amount) }}</h2></div><StatusBadge :status="selected.status" /></div><dl class="finance-details"><div v-if="selected.member"><dt>Member</dt><dd>{{ selected.member.fullName }} · {{ selected.member.memberNo }}</dd></div><div v-if="selected.investment"><dt>Investment</dt><dd>{{ selected.investment.title }}</dd></div><div><dt>Account</dt><dd>{{ selected.cashAccount.name }}</dd></div><div v-if="tab === 'income' && Number(selected.details?.principalReturned) > 0"><dt>Total transaction amount</dt><dd>{{ bdt(selected.amount) }}</dd></div><div><dt>Effective date</dt><dd>{{ date(selected.effectiveDate) }}</dd></div><div><dt>Requested by</dt><dd>{{ selected.createdBy.name }}</dd></div><div><dt>Reference</dt><dd>{{ selected.reference || '—' }}</dd></div><div><dt>Note</dt><dd class="preserve-lines">{{ selected.note || '—' }}</dd></div><div><dt>Approval rules</dt><dd>{{ selected.requiredApprovals }} distinct approval(s) · Policy {{ selected.policyVersion }} · {{ selected.allowSelfApproval ? 'Self-approval allowed' : 'No self-approval' }}</dd></div><div v-if="selected.reversalOf"><dt>Reverses</dt><dd><button class="text-link" :disabled="busy" @click="showDetails(selected.reversalOf.id)">{{ selected.reversalOf.transactionNo }}</button></dd></div></dl>
+  <AppModal :open="!!selected" :title="selected?.transactionNo ?? 'Transaction details'" :busy="busy" size="wide" @close="selected = undefined"><template v-if="selected"><div v-if="actionError" class="alert error" role="alert">{{ actionError }}</div><div class="finance-detail-heading"><div><span class="eyebrow">{{ transactionLabel(selected) }}</span><h2>{{ tab === 'income' ? incomeAmount(selected) : bdt(selected.amount) }}</h2></div><StatusBadge :status="selected.status" /></div><dl class="finance-details"><div v-if="selected.member"><dt>Member</dt><dd>{{ selected.member.fullName }} · {{ selected.member.memberNo }}</dd></div><div v-if="selected.borrower"><dt>Non-member borrower</dt><dd>{{ selected.borrower.fullName }} · {{ selected.borrower.borrowerNo }} · {{ selected.borrower.phone }}</dd></div><div v-if="selected.investment"><dt>Investment</dt><dd>{{ selected.investment.title }}</dd></div><div><dt>Account</dt><dd>{{ selected.cashAccount.name }}</dd></div><div v-if="tab === 'income' && Number(selected.details?.principalReturned) > 0"><dt>Total transaction amount</dt><dd>{{ bdt(selected.amount) }}</dd></div><div><dt>Effective date</dt><dd>{{ date(selected.effectiveDate) }}</dd></div><div><dt>Requested by</dt><dd>{{ selected.createdBy.name }}</dd></div><div><dt>Reference</dt><dd>{{ selected.reference || '—' }}</dd></div><div><dt>Note</dt><dd class="preserve-lines">{{ selected.note || '—' }}</dd></div><div><dt>Approval rules</dt><dd>{{ selected.requiredApprovals }} distinct approval(s) · Policy {{ selected.policyVersion }} · {{ selected.allowSelfApproval ? 'Self-approval allowed' : 'No self-approval' }}</dd></div><div v-if="selected.reversalOf"><dt>Reverses</dt><dd><button class="text-link" :disabled="busy" @click="showDetails(selected.reversalOf.id)">{{ selected.reversalOf.transactionNo }}</button></dd></div></dl>
     <dl v-if="selected.details" class="finance-details"><div v-for="(value,key) in selected.details" :key="key"><dt>{{ detailLabel(String(key)) }}</dt><dd>{{ detailValue(String(key),value) }}</dd></div></dl><h3>Approval history</h3><p v-if="!selected.decisions.length" class="muted">No decisions yet.</p><ol class="finance-decisions"><li v-for="d in selected.decisions" :key="d.id"><strong>{{ d.step }}. {{ d.approver.name }} · {{ d.decision }}</strong><p>{{ date(d.createdAt) }} {{ d.comment ? `· ${d.comment}` : '' }}</p></li></ol>
     <AppTable v-if="selected.entries?.length" :rows="selected.entries" :columns="[{key:'account',label:'Account'},{key:'debit',label:'Debit'},{key:'credit',label:'Credit'}]"><template #cell-account="{ row }">{{ row.account.name }}</template><template #cell-debit="{ row }">{{ bdt(row.debit) }}</template><template #cell-credit="{ row }">{{ bdt(row.credit) }}</template></AppTable>
     <AppForm v-if="canDecide" :busy="busy" @submit="decide"><h3>Review request</h3><AppSelect v-model="decision" label="Decision" :options="[{label:'Approve',value:'APPROVE'},{label:'Reject',value:'REJECT'}]" /><AppInput v-model="comment" :label="decision === 'REJECT' ? 'Reason for rejection' : 'Comment (optional)'" :required="decision === 'REJECT'" :minlength="decision === 'REJECT' ? 5 : undefined" maxlength="500" /><AppButton type="submit" :variant="decision === 'REJECT' ? 'danger' : 'primary'" :loading="busy">{{ decision === 'REJECT' ? 'Reject request' : 'Approve request' }}</AppButton></AppForm>

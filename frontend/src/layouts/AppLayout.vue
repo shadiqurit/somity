@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'; import { useRoute, useRouter } from 'vue-router';
-import { Building2, CircleHelp, FileBarChart2, History, LayoutDashboard, LogOut, Menu, StickyNote, Wallet, ShieldCheck, Sprout, Users, X } from 'lucide-vue-next';
+import { Building2, CircleHelp, FileBarChart2, History, LayoutDashboard, LogOut, Menu, StickyNote, Wallet, ShieldCheck, Sprout, UserRound, Users, X } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth'; import { useLocale } from '../composables/useLocale'; import { initials } from '../utils/format'; import { errorMessage } from '../services/api';
 import ThemeToggle from '../components/ui/ThemeToggle.vue';
 const auth = useAuthStore(); const route = useRoute(); const router = useRouter(); const mobileOpen = ref(false); const error = ref(''); const signingOut = ref(false); const { t, toggle, locale } = useLocale();
@@ -20,6 +20,7 @@ const links = computed(() => [
   { to: '/societies', label: 'Societies', icon: Building2, permission: 'societies.manage' },
   { to: '/users', label: 'Team & access', icon: ShieldCheck, permission: 'users.manage' },
   { to: '/my-profile', label: 'My dashboard', icon: LayoutDashboard, permission: 'profile.read', memberOnly: true },
+  { to: '/my-info', label: 'My information', icon: UserRound, permission: 'profile.read', memberOnly: true },
 ].filter(l => (!l.permission || auth.can(l.permission)) && (!l.memberOnly || !auth.isStaff) && (l.to === '/activity' || auth.user?.societyId || (auth.user?.isSuperAdmin && ['/societies', '/users'].includes(l.to)))));
 const switching = ref(false);
 async function switchSociety(event: Event) { switching.value = true; error.value = ''; try { await auth.switchSociety((event.target as HTMLSelectElement).value); } catch (e) { error.value = errorMessage(e); switching.value = false; } }

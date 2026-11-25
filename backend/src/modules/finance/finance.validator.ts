@@ -15,7 +15,7 @@ const paymentFields = {
 export const settlementPaymentSchema = z.object({ ...paymentFields, loanId: optionalId, settlementId: idSchema.optional() }).strict();
 export const settlementReferenceSchema = z.object({ settlementId: idSchema }).strict();
 export const transactionSchema = z.object({
-  type: z.enum(transactionTypes), memberId: optionalId, ...paymentFields,
+  type: z.enum(transactionTypes), memberId: optionalId, borrowerId: optionalId, ...paymentFields,
   loanId: optionalId, investmentId: optionalId, destinationAccountId: optionalId,
   installmentCount: z.number().int().min(1).max(600).optional(), firstDueDate: z.iso.date().optional(),
   title: z.string().trim().max(120).optional(), counterparty: z.string().trim().max(120).optional(),
@@ -23,14 +23,43 @@ export const transactionSchema = z.object({
   category: z.string().trim().max(80).optional(), payee: z.string().trim().max(120).optional(),
 }).strict().superRefine((v, ctx) => {
   const require = (ok: unknown, field: string, message: string) => { if (!ok) ctx.addIssue({ code: 'custom', path: [field], message }); };
-  if (['DEPOSIT', 'WITHDRAWAL', 'LOAN_DISBURSEMENT'].includes(v.type)) require(v.memberId, 'memberId', 'Choose a member');
-  if (!['DEPOSIT', 'WITHDRAWAL', 'LOAN_DISBURSEMENT'].includes(v.type)) require(!v.memberId, 'memberId', 'Member is determined by the linked loan or is not applicable');
-  if (v.type === 'LOAN_DISBURSEMENT') { require(v.installmentCount, 'installmentCount', 'Enter installment count'); require(v.firstDueDate && v.firstDueDate >= v.effectiveDate, 'firstDueDate', 'First due date must be on or after disbursement'); }
+  if (['DEPOSIT', 'WITHDRAWAL'].includes(v.type)) {
+    require(v.memberId, 'memberId', 'Choose a member');
+    require(!v.borrowerId, 'borrowerId', 'Non-member borrower is only allowed for loan disbursements');
+  }
+  if (v.type === 'LOAN_DISBURSEMENT') {
+    require(Boolean(v.memberId) !== Boolean(v.borrowerId), v.borrowerId ? 'borrowerId' : 'memberId', 'Choose either a member or a non-member borrower');
+    require(v.installmentCount, 'installmentCount', 'Enter installment count');
+    require(v.firstDueDate && v.firstDueDate >= v.effectiveDate, 'firstDueDate', 'First due date must be on or after disbursement');
+  }
+  if (!['DEPOSIT', 'WITHDRAWAL', 'LOAN_DISBURSEMENT'].includes(v.type)) {
+    require(!v.memberId, 'memberId', 'Member is determined by the linked loan or is not applicable');
+    require(!v.borrowerId, 'borrowerId', 'Borrower is determined by the linked loan or is not applicable');
+  }
   if (v.type === 'LOAN_REPAYMENT') require(v.loanId, 'loanId', 'Choose a loan'); else require(!v.loanId, 'loanId', 'Loan reference is not applicable');
   if (v.type === 'INVESTMENT_PURCHASE') { require(v.title && v.title.length >= 2, 'title', 'Enter investment title'); require(v.counterparty && v.counterparty.length >= 2, 'counterparty', 'Enter counterparty'); }
   if (v.type === 'INVESTMENT_RETURN') { require(v.investmentId, 'investmentId', 'Choose an investment'); require(v.principalReturned !== undefined, 'principalReturned', 'Enter principal returned'); require(v.profit !== undefined, 'profit', 'Enter profit'); } else require(!v.investmentId, 'investmentId', 'Investment reference is not applicable');
   if (v.type === 'EXPENSE') { require(v.category && v.category.length >= 2, 'category', 'Enter expense category'); require(v.payee && v.payee.length >= 2, 'payee', 'Enter payee'); }
   if (v.type === 'TRANSFER') require(v.destinationAccountId && v.destinationAccountId !== v.cashAccountId, 'destinationAccountId', 'Choose a different destination cash/bank account'); else require(!v.destinationAccountId, 'destinationAccountId', 'Destination is only used for transfers');
+});
+const optionalText = (max: number) => z.string().trim().max(max).optional().transform(v => v || null);
+export const borrowerSchema = z.object({
+  borrowerNo: z.string().trim().max(32).regex(/^[a-zA-Z0-9_-]*$/, 'Use letters, numbers, hyphens or underscores').optional().transform(v => v || undefined),
+  fullName: z.string().trim().min(2, 'Enter borrower full name').max(120),
+  phone: z.string().trim().min(6, 'Enter a valid phone number').max(25),
+  identityNumber: optionalText(40),
+  address: z.string().trim().max(500).default(''),
+  guarantorName: optionalText(120),
+  guarantorPhone: optionalText(25),
+  note: optionalText(500),
+  isActive: z.boolean().optional(),
+}).strict();
+export const borrowerUpdateSchema = borrowerSchema.partial().refine(v => Object.keys(v).length > 0, 'Provide at least one field to update');
+export const borrowerListSchema = z.object({
+  search: z.string().trim().max(120).default(''),
+  activeOnly: z.coerce.boolean().optional(),
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
 export const reversalSchema = z.object({ effectiveDate, note: z.string().trim().min(5).max(500) }).strict();
 export const decisionSchema = z.object({ decision: z.enum(['APPROVE', 'REJECT']), comment: z.string().trim().max(500).default('') }).strict().refine(v => v.decision !== 'REJECT' || v.comment.length >= 5, { path: ['comment'], message: 'Give a reason for rejection (at least 5 characters)' });
@@ -38,11 +67,16 @@ export const accountSchema = z.object({ code: z.string().trim().min(2).max(40).r
 export const policySchema = z.object({ version: z.number().int().min(0), requiredApprovals: z.number().int().min(1).max(2), allowSelfApproval: z.boolean() }).strict();
 export const dateRangeSchema = z.object({ from: z.iso.date().optional(), to: z.iso.date().optional() }).refine(v => !v.from || !v.to || v.from <= v.to, { path: ['to'], message: 'End date must be on or after start date' });
 export const reportKindSchema = z.enum(['loans', 'loan-disbursements', 'loan-repayments', 'investments', 'income', 'expenses', 'bank', 'bank-statement', 'savings', 'member-statement']);
+export const ownReportKindSchema = z.enum(['member-statement', 'savings', 'loans', 'loan-disbursements', 'loan-repayments']);
 export const reportQuerySchema = dateRangeSchema.safeExtend({
   page: z.coerce.number().int().min(1).max(100000).default(1),
   scope: z.enum(['preview', 'full']).default('preview'),
   memberId: idSchema.optional(),
   accountId: idSchema.optional(),
+});
+export const ownReportQuerySchema = dateRangeSchema.safeExtend({
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  scope: z.enum(['preview', 'full']).default('preview'),
 });
 export const reportMemberSearchSchema = z.object({ search: z.string().trim().max(120).default('') });
 export const transactionLogSchema = z.object({
@@ -55,7 +89,10 @@ export const statementListSchema = dateRangeSchema.safeExtend({
   page: z.coerce.number().int().min(1).max(100000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
-export const listSchema = statementListSchema.safeExtend({ status: z.enum(['PENDING', 'POSTED', 'REJECTED', 'CANCELLED']).optional(), type: z.enum([...transactionTypes, 'REVERSAL']).optional(), memberId: idSchema.optional(), scope: z.literal('income').optional() });
+export const listSchema = statementListSchema.safeExtend({ status: z.enum(['PENDING', 'POSTED', 'REJECTED', 'CANCELLED']).optional(), type: z.enum([...transactionTypes, 'REVERSAL']).optional(), memberId: idSchema.optional(), borrowerId: idSchema.optional(), borrowerType: z.enum(['MEMBER', 'NON_MEMBER']).optional(), scope: z.literal('income').optional() });
 export type TransactionInput = z.infer<typeof transactionSchema>;
 export type FinanceListInput = z.infer<typeof listSchema>;
+export type BorrowerInput = z.infer<typeof borrowerSchema>;
+export type BorrowerUpdateInput = z.infer<typeof borrowerUpdateSchema>;
+export type BorrowerListInput = z.infer<typeof borrowerListSchema>;
 

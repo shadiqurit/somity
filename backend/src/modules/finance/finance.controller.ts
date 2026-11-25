@@ -1,7 +1,8 @@
 import type { Request, RequestHandler, Response } from 'express';
 import * as service from './finance.service.js';
 import * as reports from './finance.reports.js';
-import { accountSchema, decisionSchema, idSchema, keySchema, listSchema, policySchema, reversalSchema, transactionSchema, dateRangeSchema, transactionLogSchema, reportKindSchema, reportMemberSearchSchema, reportQuerySchema } from './finance.validator.js';
+import * as borrowerService from './finance.borrowers.js';
+import { accountSchema, borrowerListSchema, borrowerSchema, borrowerUpdateSchema, decisionSchema, idSchema, keySchema, listSchema, ownReportKindSchema, ownReportQuerySchema, policySchema, reversalSchema, transactionSchema, dateRangeSchema, transactionLogSchema, reportKindSchema, reportMemberSearchSchema, reportQuerySchema } from './finance.validator.js';
 import { AppError } from '../../utils/errors.js';
 import { auditView } from '../../services/audit.js';
 
@@ -59,6 +60,21 @@ export const investments: RequestHandler = async (req, res) => {
   res.json(investments);
 };
 export const loanSummary: RequestHandler = async (req, res) => { res.json(await reports.loanSummary(req.societyId)); };
+export const ownLoanSummary: RequestHandler = async (req, res) => {
+  if (!req.user.memberId) throw new AppError(404, 'No member profile is linked to this account');
+  const summary = await reports.memberLoanSummary(req.societyId, req.user.memberId);
+  await auditView(req.user.id, req.societyId, 'FINANCE_LOANS_VIEWED', 'member', req.user.memberId);
+  res.json(summary);
+};
+export const borrowers: RequestHandler = async (req, res) => { res.json(await borrowerService.listBorrowers(req.societyId, borrowerListSchema.parse(req.query))); };
+export const borrowerDetail: RequestHandler = async (req, res) => {
+  const borrowerId = id(req.params.id);
+  const borrower = await borrowerService.getBorrower(req.societyId, borrowerId);
+  await auditView(req.user.id, req.societyId, 'FINANCE_BORROWER_VIEWED', 'non_member_borrower', borrowerId);
+  res.json(borrower);
+};
+export const createBorrower: RequestHandler = async (req, res) => { res.status(201).json(await borrowerService.createBorrower(req.societyId, req.user.id, borrowerSchema.parse(req.body))); };
+export const updateBorrower: RequestHandler = async (req, res) => { res.json(await borrowerService.updateBorrower(req.societyId, req.user.id, id(req.params.id), borrowerUpdateSchema.parse(req.body))); };
 export const investmentSummary: RequestHandler = async (req, res) => { res.json(await reports.investmentSummary(req.societyId)); };
 export const bankSummary: RequestHandler = async (req, res) => { res.json(await reports.bankSummary(req.societyId, dateRangeSchema.parse(req.query))); };
 export const expenseSummary: RequestHandler = async (req, res) => { res.json(await reports.expenseSummary(req.societyId, dateRangeSchema.parse(req.query))); };
@@ -75,6 +91,14 @@ export const financialReport: RequestHandler = async (req, res) => {
   const query = reportQuerySchema.parse(req.query);
   const report = await reports.financialReport(req.societyId, kind, query);
   if (query.scope === 'full') await auditView(req.user.id, req.societyId, 'FINANCE_REPORT_EXPORTED', 'finance_report', kind);
+  res.set('Cache-Control', 'no-store').json(report);
+};
+export const ownFinancialReport: RequestHandler = async (req, res) => {
+  if (!req.user.memberId) throw new AppError(404, 'No member profile is linked to this account');
+  const kind = ownReportKindSchema.parse(req.params.kind);
+  const query = ownReportQuerySchema.parse(req.query);
+  const report = await reports.financialReport(req.societyId, kind, { ...query, memberId: req.user.memberId });
+  if (query.scope === 'full') await auditView(req.user.id, req.societyId, 'FINANCE_REPORT_EXPORTED', 'finance_report', `me:${kind}`);
   res.set('Cache-Control', 'no-store').json(report);
 };
 

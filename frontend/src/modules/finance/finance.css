@@ -29,4 +29,8 @@
 .badge.posted { color: var(--success-text); background: var(--success-bg); }
 .badge.rejected { color: var(--danger-text); background: var(--danger-bg); }
 .badge.cancelled { color: var(--text-muted); background: var(--surface-hover); }
+.borrower-tag { display: inline-block; margin-left: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: var(--warning-text); background: var(--warning-bg); vertical-align: middle; }
+.borrower-tag.inactive { color: var(--text-muted); background: var(--surface-hover); }
+.loans-view-tabs { margin-bottom: 18px; padding: 0; border-bottom: none; }
+.quick-borrower-box { padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-hover); display: flex; flex-direction: column; gap: 12px; }
 @media (max-width: 640px) { .finance-filters { padding: 16px; gap: 12px; } .finance-filters .field { min-width: 125px; } .finance-tabs { padding: 14px; gap: 4px; } .finance-tabs .btn { padding-inline: 10px; font-size: 13px; } .finance-details { grid-template-columns: 1fr; gap: 15px; } .statement-summary { padding-inline: 14px; } .finance-member-search { flex-wrap: wrap; } .finance-summary .summary-card strong, .statement-summary .summary-card strong { font-size: 21px; } }

@@ -15,6 +15,7 @@ const zero = () => new Prisma.Decimal(0);
 const money = (value: Prisma.Decimal | null | undefined) => (value ?? zero()).toFixed(2);
 const detailInclude = {
   member: { select: { id: true, fullName: true, memberNo: true } },
+  borrower: { select: { id: true, fullName: true, borrowerNo: true, phone: true } },
   cashAccount: { select: { id: true, name: true, kind: true } },
   investment: { select: { title: true } },
   createdBy: { select: { id: true, name: true } },
@@ -83,7 +84,7 @@ export async function accounts(societyId: string) {
   }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 export async function list(societyId: string, input: FinanceListInput) {
-  const where: Prisma.FinancialTransactionWhereInput = { societyId, deletedAt: null, ...(input.status ? { status: input.status } : {}), ...(input.type ? { type: input.type } : {}), ...(input.memberId ? { memberId: input.memberId } : {}), effectiveDate: dateRange(input) };
+  const where: Prisma.FinancialTransactionWhereInput = { societyId, deletedAt: null, ...(input.status ? { status: input.status } : {}), ...(input.type ? { type: input.type } : {}), ...(input.memberId ? { memberId: input.memberId } : {}), ...(input.borrowerId ? { borrowerId: input.borrowerId } : {}), effectiveDate: dateRange(input) };
   if (input.scope === 'income') {
     const income: Prisma.FinancialTransactionWhereInput = {
       OR: [
@@ -151,19 +152,19 @@ type NewRequest = Pick<TransactionInput, 'type' | 'cashAccountId' | 'amount' | '
   Partial<Pick<TransactionInput, 'investmentId'>>;
 
 async function createRequest(tx: Tx, societyId: string, actorId: string, input: NewRequest, request: {
-  key: string; hash: string; memberId: string | null; details?: Prisma.InputJsonObject; settlementId?: string;
+  key: string; hash: string; memberId: string | null; borrowerId?: string | null; details?: Prisma.InputJsonObject; settlementId?: string;
 }) {
   const { type, cashAccountId, amount, effectiveDate, reference, note, loanId, investmentId } = input;
-  const { key, hash, memberId, details, settlementId } = request;
+  const { key, hash, memberId, borrowerId = null, details, settlementId } = request;
   const policy = await tx.financePolicy.findUnique({ where: { societyId } });
   const item = await tx.financialTransaction.create({ data: {
-    societyId, type, memberId, cashAccountId, amount, effectiveDate: new Date(effectiveDate), reference, note, loanId, investmentId,
+    societyId, type, memberId, borrowerId, cashAccountId, amount, effectiveDate: new Date(effectiveDate), reference, note, loanId, investmentId,
     details, settlementId, createdById: actorId, idempotencyKey: key, requestHash: hash,
     transactionNo: 'TX-' + randomBytes(12).toString('hex').toUpperCase(),
     policyVersion: policy?.version ?? 0, requiredApprovals: policy?.requiredApprovals ?? 1, allowSelfApproval: policy?.allowSelfApproval ?? false,
   } });
   await audit(tx, actorId, 'FINANCE_REQUESTED', 'transaction', item.id, {
-    ...JSON.parse(JSON.stringify(input)), ...(settlementId ? { memberId, settlementId } : {}),
+    ...JSON.parse(JSON.stringify(input)), ...(settlementId ? { memberId, settlementId } : {}), ...(borrowerId ? { borrowerId } : {}),
     requiredApprovals: item.requiredApprovals, policyVersion: item.policyVersion,
   }, societyId);
   return get(societyId, item.id, tx);
@@ -175,13 +176,16 @@ export async function submit(societyId: string, actorId: string, input: Transact
   return financialMutation(societyId, async tx => {
     const prior = await replay(tx, societyId, key, hash); if (prior) return prior;
     let memberId = input.memberId;
+    let borrowerId = input.borrowerId ?? null;
     if (memberId && !await tx.member.findFirst({ where: { id: memberId, societyId, archivedAt: null, status: 'ACTIVE' } })) throw new AppError(404, 'Active member not found in this society');
+    if (borrowerId && !await tx.nonMemberBorrower.findFirst({ where: { id: borrowerId, societyId, isActive: true } })) throw new AppError(404, 'Active non-member borrower not found in this society');
     await requireCashAccount(tx, societyId, input.cashAccountId);
     if (input.loanId) {
       const loan = await tx.loan.findUnique({ where: { societyId_id: { societyId, id: input.loanId } }, include: { disbursement: true, member: { select: { status: true } } } });
       if (!loan) throw new AppError(404, 'Loan not found in this society');
-      if (loan.member.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
+      if (loan.member?.status === 'CLOSED') throw new AppError(409, 'This membership is closed');
       memberId = loan.memberId;
+      borrowerId = loan.borrowerId;
       await assertProductDate(tx, societyId, loan.disbursement, new Date(input.effectiveDate));
     }
     if (input.investmentId) {
@@ -194,7 +198,7 @@ export async function submit(societyId: string, actorId: string, input: Transact
     if (input.type === 'LOAN_DISBURSEMENT') principalSchedule(input.amount, input.installmentCount!, input.firstDueDate!);
     if (input.type === 'INVESTMENT_RETURN' && !new Prisma.Decimal(input.principalReturned!).plus(input.profit!).eq(input.amount)) throw new AppError(422, 'Return amount must equal principal returned plus profit');
     const details = Object.fromEntries(['installmentCount', 'firstDueDate', 'title', 'counterparty', 'principalReturned', 'profit', 'category', 'payee', 'destinationAccountId'].filter(key => normalized[key as keyof typeof normalized] != null).map(key => [key, normalized[key as keyof typeof normalized]])) as Prisma.InputJsonObject;
-    return createRequest(tx, societyId, actorId, normalized, { key, hash, memberId, details });
+    return createRequest(tx, societyId, actorId, normalized, { key, hash, memberId, borrowerId, details });
   });
 }
 
@@ -239,7 +243,7 @@ export async function requestReversal(societyId: string, actorId: string, id: st
     if (new Date(input.effectiveDate) < original.effectiveDate) throw new AppError(422, 'Reversal date cannot precede the original transaction');
     if (await tx.financialTransaction.findFirst({ where: { societyId, reversalOfId: id, status: { in: ['PENDING', 'POSTED'] } } })) throw new AppError(409, 'A reversal is already pending or posted');
     const captured = await tx.financePolicy.findUnique({ where: { societyId } });
-    const item = await tx.financialTransaction.create({ data: { societyId, type: 'REVERSAL', memberId: original.memberId, settlementId: original.settlementId, loanId: original.loanId, investmentId: original.investmentId, details: original.details ?? Prisma.JsonNull, cashAccountId: original.cashAccountId, amount: original.amount, effectiveDate: new Date(input.effectiveDate), reference: original.transactionNo, note: input.note, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: `RV-${randomBytes(12).toString('hex').toUpperCase()}`, reversalOfId: id, policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
+    const item = await tx.financialTransaction.create({ data: { societyId, type: 'REVERSAL', memberId: original.memberId, borrowerId: original.borrowerId, settlementId: original.settlementId, loanId: original.loanId, investmentId: original.investmentId, details: original.details ?? Prisma.JsonNull, cashAccountId: original.cashAccountId, amount: original.amount, effectiveDate: new Date(input.effectiveDate), reference: original.transactionNo, note: input.note, createdById: actorId, idempotencyKey: key, requestHash: hash, transactionNo: `RV-${randomBytes(12).toString('hex').toUpperCase()}`, reversalOfId: id, policyVersion: captured?.version ?? 0, requiredApprovals: captured?.requiredApprovals ?? 1, allowSelfApproval: captured?.allowSelfApproval ?? false } });
     await audit(tx, actorId, 'FINANCE_REVERSAL_REQUESTED', 'transaction', item.id, { reversalOfId: id, ...input }, societyId);
     return get(societyId, item.id, tx);
   });
@@ -374,7 +378,7 @@ export async function summary(societyId: string, input: Range) {
 export async function ledger(societyId: string, input: FinanceListInput) {
   const where: Prisma.LedgerEntryWhereInput = { societyId, ...(input.memberId ? { memberId: input.memberId } : {}), transaction: { status: 'POSTED', effectiveDate: dateRange(input) } };
   const [items, total] = await db.$transaction([
-    db.ledgerEntry.findMany({ where, orderBy: [{ transaction: { effectiveDate: 'desc' } }, { transaction: { postedAt: 'desc' } }, { transactionId: 'asc' }, { line: 'asc' }], skip: (input.page - 1) * input.pageSize, take: input.pageSize, include: { account: { select: { code: true, name: true } }, member: { select: { fullName: true, memberNo: true } }, transaction: { select: { transactionNo: true, effectiveDate: true, type: true } } } }),
+    db.ledgerEntry.findMany({ where, orderBy: [{ transaction: { effectiveDate: 'desc' } }, { transaction: { postedAt: 'desc' } }, { transactionId: 'asc' }, { line: 'asc' }], skip: (input.page - 1) * input.pageSize, take: input.pageSize, include: { account: { select: { code: true, name: true } }, member: { select: { fullName: true, memberNo: true } }, transaction: { select: { transactionNo: true, effectiveDate: true, type: true, borrower: { select: { fullName: true, borrowerNo: true } } } } } }),
     db.ledgerEntry.count({ where }),
   ], { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   return { items, total, page: input.page, pageSize: input.pageSize, pages: Math.ceil(total / input.pageSize) };
