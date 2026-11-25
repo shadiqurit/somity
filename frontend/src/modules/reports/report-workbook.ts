@@ -13,22 +13,23 @@ function moneyCell(amount: string): CellObject {
 
 export async function downloadWorkbook({ kind, data, title, society, period, filename }: ReportDocument) {
   const columns = reportColumns(kind);
-  await writeXlsxFile([
+  const bankColumns = reportColumns('bank');
+  const sheets = [
     {
-      sheet: 'Summary',
+      sheet: kind === 'summary' ? 'Overview' : 'Summary',
       columns: [{ width: 36 }, { width: 48 }],
       data: [
         [heading(title)], ['Society', society],
         ...(data.member ? [['Member', data.member.fullName], ['Member number', data.member.memberNo]] : []),
         ...(data.account ? [['Account', { value: reportAccountLabel(data.account), type: String, wrap: true }]] : []),
-        ['Period', period], ['Records', data.total], [],
+        ['Period', period], [kind === 'summary' ? 'Posted transactions' : 'Records', data.total], [],
         [heading('Metric'), heading('Amount (BDT)')],
         ...data.summary.map(item => [item.label, moneyCell(item.amount)]),
       ],
     },
     {
-      sheet: kind === 'bank' ? 'Accounts' : 'Transactions',
-      orientation: 'landscape',
+      sheet: kind === 'summary' ? 'All Reports' : kind === 'bank' ? 'Accounts' : 'Transactions',
+      orientation: 'landscape' as const,
       stickyRowsCount: 1,
       columns: columns.map(({ width }) => ({ width })),
       data: [
@@ -36,5 +37,16 @@ export async function downloadWorkbook({ kind, data, title, society, period, fil
         ...data.items.map(row => columns.map(({ key, money }) => money ? moneyCell(row[key]!) : { value: row[key] ?? '', type: String, wrap: true })),
       ],
     },
-  ]).toFile(`${filename}.xlsx`);
+    ...(kind === 'summary' && data.accounts?.length ? [{
+      sheet: 'Cash & Bank',
+      orientation: 'landscape' as const,
+      stickyRowsCount: 1,
+      columns: bankColumns.map(({ width }) => ({ width })),
+      data: [
+        bankColumns.map(({ label }) => heading(label)),
+        ...data.accounts.map(row => bankColumns.map(({ key, money }) => money ? moneyCell(row[key as keyof typeof row]!) : { value: row[key as keyof typeof row] ?? '', type: String, wrap: true })),
+      ],
+    }] : []),
+  ];
+  await writeXlsxFile(sheets).toFile(`${filename}.xlsx`);
 }

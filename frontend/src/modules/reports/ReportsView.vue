@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
-import { ArrowDownLeft, ArrowUpRight, ChartNoAxesCombined, FileSpreadsheet, Landmark, ListOrdered, PiggyBank, Printer, UserRound, Wallet } from 'lucide-vue-next';
+import { ArrowDownLeft, ArrowRight, ArrowUpRight, ChartNoAxesCombined, FileSpreadsheet, Landmark, LayoutDashboard, ListOrdered, PiggyBank, Printer, UserRound, Wallet } from 'lucide-vue-next';
 import AppTable from '../../components/tables/AppTable.vue';
 import AppButton from '../../components/ui/AppButton.vue';
 import AppInput from '../../components/ui/AppInput.vue';
+import LoadingState from '../../components/ui/LoadingState.vue';
 import SummaryCard from '../../components/ui/SummaryCard.vue';
 import { useLocale } from '../../composables/useLocale';
 import { api, errorMessage } from '../../services/api';
@@ -16,6 +17,7 @@ import ReportPrint from './ReportPrint.vue';
 import { isLoanReport, reportAccountLabel, reportCell, reportColumns, reportMemberLabel, type LoanReportKind, type ReportData, type ReportDates, type ReportDocument, type ReportKind, type ReportMember } from './report-data';
 
 const reportOptions = {
+  summary: { title: 'Overall summary', icon: LayoutDashboard, description: 'All financial reports summarized at a glance on one page.' },
   loans: { title: 'Loans', icon: Wallet },
   investments: { title: 'Investments', icon: ChartNoAxesCombined, description: 'Principal movements and realized investment profit.' },
   income: { title: 'Income', icon: ArrowDownLeft, description: 'Other income and investment profit, including reversals.' },
@@ -34,10 +36,11 @@ const loanReports = {
 
 const auth = useAuthStore();
 const { t } = useLocale();
-const kind = ref<ReportKind>('loans');
+const kind = ref<ReportKind>('summary');
 const category = computed(() => isLoanReport(kind.value) ? 'loans' : kind.value);
 const active = computed(() => isLoanReport(kind.value) ? loanReports[kind.value] : reportOptions[kind.value]);
 const columns = computed(() => reportColumns(kind.value));
+const bankAccountColumns = reportColumns('bank');
 const from = ref('');
 const to = ref('');
 const applied = ref<ReportDates>({});
@@ -247,12 +250,56 @@ onUnmounted(() => {
       <p class="muted report-period">
         <strong v-if="result.member">{{ reportMemberLabel(result.member) }} · </strong>
         <strong v-if="result.account">{{ reportAccountLabel(result.account) }} · </strong>{{ period }}
+        <template v-if="kind === 'summary'"> · {{ result.total }} {{ t('Posted transactions') }}</template>
       </p>
       <div class="report-summary">
         <SummaryCard v-for="item in result.summary" :key="item.label" :label="t(item.label)" :value="bdt(item.amount)" detail="" />
       </div>
     </section>
-    <AppTable v-if="loading || result" :rows="result?.items ?? []" :columns="columns" :loading="loading"
+
+    <template v-if="kind === 'summary'">
+      <LoadingState v-if="loading && !result" label="Loading overall summary…" />
+      <template v-else-if="result?.sections">
+        <section class="summary-overview-grid" aria-label="All report summaries">
+          <article v-for="section in result.sections" :key="section.key" class="summary-section-card">
+            <header class="summary-section-head">
+              <div class="summary-section-title">
+                <component :is="reportOptions[section.key].icon" :size="18" aria-hidden="true" />
+                <div>
+                  <h3>{{ t(section.title) }}</h3>
+                  <small class="muted">{{ section.records }} {{ section.key === 'bank' ? 'accounts' : 'entries' }}</small>
+                </div>
+              </div>
+              <button type="button" class="summary-section-link" :disabled="!!exporting" @click="select(section.key)">
+                {{ t('View report') }} <ArrowRight :size="14" aria-hidden="true" />
+              </button>
+            </header>
+            <dl class="summary-section-metrics">
+              <div v-for="metric in section.metrics" :key="metric.label">
+                <dt>{{ t(metric.label) }}</dt>
+                <dd>{{ bdt(metric.amount) }}</dd>
+              </div>
+            </dl>
+          </article>
+        </section>
+
+        <section v-if="result.accounts?.length" class="summary-accounts-section" aria-label="Cash and bank accounts overview">
+          <div class="summary-accounts-head">
+            <h3>{{ t('Cash & bank accounts') }}</h3>
+            <button type="button" class="summary-section-link" :disabled="!!exporting" @click="select('bank')">
+              {{ t('View report') }} <ArrowRight :size="14" aria-hidden="true" />
+            </button>
+          </div>
+          <AppTable :rows="result.accounts" :columns="bankAccountColumns">
+            <template v-for="column in bankAccountColumns" :key="column.key" #[`cell-${column.key}`]="{ row }">
+              <span :class="{ 'report-money': column.money }">{{ reportCell(row, column) }}</span>
+            </template>
+          </AppTable>
+        </section>
+      </template>
+    </template>
+
+    <AppTable v-else-if="loading || result" :rows="result?.items ?? []" :columns="columns" :loading="loading"
       :page="kind === 'bank' ? undefined : result?.page" :pages="result?.pages" :total="result?.total" @page="load">
       <template v-for="column in columns" :key="column.key" #[`cell-${column.key}`]="{ row }">
         <span :class="{ 'report-money': column.money, 'report-details': column.key === 'details' }">{{ reportCell(row, column) }}</span>
@@ -283,8 +330,26 @@ onUnmounted(() => {
 .report-summary :deep(.summary-card strong) { font-size: clamp(18px, 2vw, 25px); line-height: 1.2; overflow-wrap: anywhere; }
 .report-money { display: block; text-align: right; font-variant-numeric: tabular-nums; }
 .report-details { display: block; min-width: 145px; max-width: 430px; overflow-wrap: anywhere; white-space: normal; }
+.summary-overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 14px; padding: 0 23px 23px; }
+.summary-section-card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-subtle); padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.summary-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.summary-section-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.summary-section-title svg { flex-shrink: 0; color: var(--accent); }
+.summary-section-title h3 { margin: 0; font-size: 15px; line-height: 1.3; color: var(--text); }
+.summary-section-title small { display: block; font-size: 12px; margin-top: 2px; }
+.summary-section-link { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--accent); font-size: 13px; font-weight: 600; padding: 4px 6px; border-radius: 6px; cursor: pointer; flex-shrink: 0; }
+.summary-section-link:hover { background: var(--accent-subtle); }
+.summary-section-metrics { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.summary-section-metrics > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 6px; border-bottom: 1px dashed var(--border); font-size: 14px; }
+.summary-section-metrics > div:last-child { border-bottom: 0; padding-bottom: 0; font-weight: 700; color: var(--text); }
+.summary-section-metrics dt { color: var(--text-secondary); }
+.summary-section-metrics > div:last-child dt { color: var(--text); }
+.summary-section-metrics dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
+.summary-accounts-section { border-top: 1px solid var(--border); padding-top: 16px; }
+.summary-accounts-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 23px 10px; }
+.summary-accounts-head h3 { margin: 0; font-size: 15px; color: var(--text); }
 @media (max-width: 640px) {
-  .report-filters, .report-totals, .loan-report-options { padding-inline: 16px; }
+  .report-filters, .report-totals, .loan-report-options, .summary-overview-grid, .summary-accounts-head { padding-inline: 16px; }
   .report-filters :deep(.field) { flex: 1 1 125px; min-width: 0; }
   .report-filters .btn { margin-top: 0; align-self: end; }
   .report-summary { grid-template-columns: repeat(auto-fit, minmax(min(145px, 100%), 1fr)); }

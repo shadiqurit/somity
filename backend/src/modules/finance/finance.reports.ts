@@ -209,34 +209,36 @@ export function reportCashAccounts(societyId: string) {
   return db.ledgerAccount.findMany({ where: { societyId, kind: { in: cashAccountKinds } }, orderBy: { code: 'asc' }, select: reportAccountSelect });
 }
 
-export async function bankSummary(societyId: string, input: { from?: string; to?: string }) {
+async function bankSummaryTx(tx: Tx, societyId: string, input: { from?: string; to?: string }) {
   const effectiveDate = range(input);
-  return db.$transaction(async tx => {
-    const accounts = await tx.ledgerAccount.findMany({ where: { societyId, kind: { in: cashAccountKinds } }, orderBy: { code: 'asc' } });
-    const items = await Promise.all(accounts.map(async account => {
-      const { opening, deposits, withdrawals, closing } = await accountPeriod(tx, societyId, account.id, input);
-      return { ...account, opening, deposits, withdrawals, closing };
-    }));
-    const [expenses, flows] = await Promise.all([
-      expenseLedgerTotals(tx, societyId, effectiveDate),
-      tx.ledgerEntry.aggregate({
-        where: { societyId, account: { kind: { in: cashAccountKinds } }, transaction: { status: 'POSTED', effectiveDate, NOT: movements('TRANSFER') } },
-        _sum: { debit: true, credit: true },
-      }),
-    ]);
-    const opening = items.reduce((total, account) => total.plus(account.opening), zero());
-    const closing = items.reduce((total, account) => total.plus(account.closing), zero());
-    return {
-      items,
-      expenses: (expenses._sum.debit ?? zero()).minus(expenses._sum.credit ?? zero()).toFixed(2),
-      summary: {
-        opening: opening.toFixed(2),
-        incoming: (flows._sum.debit ?? zero()).toFixed(2),
-        outgoing: (flows._sum.credit ?? zero()).toFixed(2),
-        closing: closing.toFixed(2),
-      },
-    };
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  const accounts = await tx.ledgerAccount.findMany({ where: { societyId, kind: { in: cashAccountKinds } }, orderBy: { code: 'asc' } });
+  const items = await Promise.all(accounts.map(async account => {
+    const { opening, deposits, withdrawals, closing } = await accountPeriod(tx, societyId, account.id, input);
+    return { ...account, opening, deposits, withdrawals, closing };
+  }));
+  const [expenses, flows] = await Promise.all([
+    expenseLedgerTotals(tx, societyId, effectiveDate),
+    tx.ledgerEntry.aggregate({
+      where: { societyId, account: { kind: { in: cashAccountKinds } }, transaction: { status: 'POSTED', effectiveDate, NOT: movements('TRANSFER') } },
+      _sum: { debit: true, credit: true },
+    }),
+  ]);
+  const opening = items.reduce((total, account) => total.plus(account.opening), zero());
+  const closing = items.reduce((total, account) => total.plus(account.closing), zero());
+  return {
+    items,
+    expenses: (expenses._sum.debit ?? zero()).minus(expenses._sum.credit ?? zero()).toFixed(2),
+    summary: {
+      opening: opening.toFixed(2),
+      incoming: (flows._sum.debit ?? zero()).toFixed(2),
+      outgoing: (flows._sum.credit ?? zero()).toFixed(2),
+      closing: closing.toFixed(2),
+    },
+  };
+}
+
+export async function bankSummary(societyId: string, input: { from?: string; to?: string }) {
+  return db.$transaction(tx => bankSummaryTx(tx, societyId, input), { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
 }
 
 export async function incomeSummary(societyId: string, input: { from?: string; to?: string }) {
@@ -400,6 +402,83 @@ async function loanMovementTotals(tx: Tx, where: Prisma.LedgerEntryWhereInput, i
     : { 'Gross disbursed': debit, 'Disbursement reversals': credit, 'Net disbursed': debit.minus(credit) };
 }
 
+async function summaryReport(societyId: string, input: { from?: string; to?: string }) {
+  const effectiveDate = range(input);
+  return db.$transaction(async tx => {
+    const countEntries = (kinds: readonly AccountKind[]) =>
+      tx.ledgerEntry.count({ where: { societyId, account: { kind: { in: [...kinds] } }, transaction: { status: 'POSTED', effectiveDate } } });
+
+    const [
+      bankData,
+      savingsTotals,
+      loanTotals,
+      investmentTotals,
+      incomeTotals,
+      expenseTotals,
+      savingsCount,
+      loansCount,
+      investmentsCount,
+      incomeCount,
+      expensesCount,
+      totalTransactions,
+    ] = await Promise.all([
+      bankSummaryTx(tx, societyId, input),
+      reportTotals(tx, societyId, 'savings', input),
+      reportTotals(tx, societyId, 'loans', input),
+      reportTotals(tx, societyId, 'investments', input),
+      reportTotals(tx, societyId, 'income', input),
+      reportTotals(tx, societyId, 'expenses', input),
+      countEntries(reportAccounts.savings),
+      countEntries(reportAccounts.loans),
+      countEntries(reportAccounts.investments),
+      countEntries(reportAccounts.income),
+      countEntries(reportAccounts.expenses),
+      tx.financialTransaction.count({ where: { societyId, status: 'POSTED', effectiveDate } }),
+    ]);
+
+    const toMetrics = (totals: Record<string, Prisma.Decimal | undefined>) =>
+      Object.entries(totals).flatMap(([label, amount]) => (amount ? [{ label, amount: amount.toFixed(2) }] : []));
+
+    const totalIncome = incomeTotals['Total income'] ?? zero();
+    const netExpenses = expenseTotals['Net expenses'] ?? zero();
+    const netSurplus = totalIncome.minus(netExpenses);
+
+    const summary = [
+      { label: 'Closing cash & bank', amount: bankData.summary.closing },
+      { label: 'Closing savings', amount: (savingsTotals['Closing savings'] ?? zero()).toFixed(2) },
+      { label: 'Closing loan receivables', amount: (loanTotals['Closing receivables'] ?? zero()).toFixed(2) },
+      { label: 'Closing investments', amount: (investmentTotals['Closing principal'] ?? zero()).toFixed(2) },
+      { label: 'Total income', amount: totalIncome.toFixed(2) },
+      { label: 'Net expenses', amount: netExpenses.toFixed(2) },
+      { label: 'Net surplus', amount: netSurplus.toFixed(2) },
+    ];
+
+    const sections = [
+      { key: 'bank' as const, title: 'Cash & bank', records: bankData.items.length, metrics: bankReportTotals(bankData.summary.opening, bankData.summary.incoming, bankData.summary.outgoing, bankData.summary.closing) },
+      { key: 'savings' as const, title: 'Member savings', records: savingsCount, metrics: toMetrics(savingsTotals) },
+      { key: 'loans' as const, title: 'Loans', records: loansCount, metrics: toMetrics(loanTotals) },
+      { key: 'investments' as const, title: 'Investments', records: investmentsCount, metrics: toMetrics(investmentTotals) },
+      { key: 'income' as const, title: 'Income', records: incomeCount, metrics: toMetrics(incomeTotals) },
+      { key: 'expenses' as const, title: 'Expenses', records: expensesCount, metrics: toMetrics(expenseTotals) },
+    ];
+
+    const accounts = bankData.items.map(({ id, name, code, kind, opening, deposits, withdrawals, closing }) => ({
+      id, name, code, kind, opening, deposits, withdrawals, closing,
+    }));
+
+    const items = sections.flatMap(section =>
+      section.metrics.map((metric, index) => ({
+        id: `${section.key}-${index}`,
+        category: section.title,
+        metric: metric.label,
+        amount: metric.amount,
+      })),
+    );
+
+    return { summary, sections, accounts, items, total: totalTransactions, page: 1, pages: 1 };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+}
+
 export async function financialReport(societyId: string, kind: ReturnType<typeof reportKindSchema.parse>, input: ReportQuery) {
   const { memberId, accountId } = input;
   const splitLoanReport = kind === 'loan-disbursements' || kind === 'loan-repayments';
@@ -409,6 +488,7 @@ export async function financialReport(societyId: string, kind: ReturnType<typeof
     throw new AppError(422, 'Member filters are available for loans, savings and member statements');
   }
   if (accountId && kind !== 'bank' && kind !== 'bank-statement') throw new AppError(422, 'Account filters are available for cash and bank reports');
+  if (kind === 'summary') return summaryReport(societyId, input);
   if (kind === 'bank-statement') {
     if (!accountId) throw new AppError(422, 'Choose an account for the statement');
     return accountReport(societyId, accountId, input, true);
