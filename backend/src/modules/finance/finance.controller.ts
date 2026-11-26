@@ -4,7 +4,6 @@ import * as reports from './finance.reports.js';
 import * as borrowerService from './finance.borrowers.js';
 import { accountSchema, borrowerListSchema, borrowerSchema, borrowerUpdateSchema, decisionSchema, idSchema, keySchema, listSchema, ownReportKindSchema, ownReportQuerySchema, policySchema, reversalSchema, transactionSchema, dateRangeSchema, transactionLogSchema, reportKindSchema, reportMemberSearchSchema, reportQuerySchema } from './finance.validator.js';
 import { AppError } from '../../utils/errors.js';
-import { auditView } from '../../services/audit.js';
 
 const id = (value: unknown) => idSchema.parse(value);
 export const accounts: RequestHandler = async (req, res) => { res.json(await service.accounts(req.societyId)); };
@@ -15,7 +14,6 @@ export const list: RequestHandler = async (req, res) => { res.json(await service
 export const transactionLog: RequestHandler = async (req, res) => { res.json(await service.transactionLog(req.societyId, transactionLogSchema.parse(req.query))); };
 export const get: RequestHandler = async (req, res) => {
   const transaction = await service.get(req.societyId, id(req.params.id));
-  await auditView(req.user.id, req.societyId, 'FINANCE_TRANSACTION_VIEWED', 'transaction', transaction.id);
   res.json(transaction);
 };
 export const remove: RequestHandler = async (req, res) => { await service.removeRejected(req.societyId, req.user.id, id(req.params.id)); res.status(204).end(); };
@@ -25,7 +23,6 @@ export const decide: RequestHandler = async (req, res) => { res.json(await servi
 export const cancel: RequestHandler = async (req, res) => { res.json(await service.cancel(req.societyId, req.user.id, id(req.params.id))); };
 async function viewStatement(req: Request, res: Response, memberId: string) {
   const statement = await service.statement(req.societyId, memberId, listSchema.parse(req.query));
-  await auditView(req.user.id, req.societyId, 'FINANCE_STATEMENT_VIEWED', 'member', memberId);
   res.json(statement);
 }
 export const statement: RequestHandler = async (req, res) => { await viewStatement(req, res, id(req.params.memberId)); };
@@ -36,41 +33,34 @@ export const ownStatement: RequestHandler = async (req, res) => {
 export const summary: RequestHandler = async (req, res) => { res.json(await service.summary(req.societyId, dateRangeSchema.parse(req.query))); };
 export const ledger: RequestHandler = async (req, res) => {
   const ledger = await service.ledger(req.societyId, listSchema.parse(req.query));
-  await auditView(req.user.id, req.societyId, 'FINANCE_LEDGER_VIEWED', 'ledger', req.societyId);
   res.json(ledger);
 };
 export const loans: RequestHandler = async (req, res) => {
   const loanId = req.params.id ? id(req.params.id) : undefined;
   const loans = await reports.loans(req.societyId, listSchema.parse(req.query), undefined, loanId);
-  if (loanId) await auditView(req.user.id, req.societyId, 'FINANCE_LOAN_VIEWED', 'loan', loanId);
   res.json(loans);
 };
 export const ownLoans: RequestHandler = async (req, res) => {
   if (!req.user.memberId) throw new AppError(404, 'No member profile linked');
   const loanId = req.params.id ? id(req.params.id) : undefined;
   const loans = await reports.loans(req.societyId, listSchema.parse(req.query), req.user.memberId, loanId);
-  if (loanId) await auditView(req.user.id, req.societyId, 'FINANCE_LOAN_VIEWED', 'loan', loanId);
-  else await auditView(req.user.id, req.societyId, 'FINANCE_LOANS_VIEWED', 'member', req.user.memberId);
   res.json(loans);
 };
 export const investments: RequestHandler = async (req, res) => {
   const investmentId = req.params.id ? id(req.params.id) : undefined;
   const investments = await reports.investments(req.societyId, listSchema.parse(req.query), investmentId);
-  if (investmentId) await auditView(req.user.id, req.societyId, 'FINANCE_INVESTMENT_VIEWED', 'investment', investmentId);
   res.json(investments);
 };
 export const loanSummary: RequestHandler = async (req, res) => { res.json(await reports.loanSummary(req.societyId)); };
 export const ownLoanSummary: RequestHandler = async (req, res) => {
   if (!req.user.memberId) throw new AppError(404, 'No member profile is linked to this account');
   const summary = await reports.memberLoanSummary(req.societyId, req.user.memberId);
-  await auditView(req.user.id, req.societyId, 'FINANCE_LOANS_VIEWED', 'member', req.user.memberId);
   res.json(summary);
 };
 export const borrowers: RequestHandler = async (req, res) => { res.json(await borrowerService.listBorrowers(req.societyId, borrowerListSchema.parse(req.query))); };
 export const borrowerDetail: RequestHandler = async (req, res) => {
   const borrowerId = id(req.params.id);
   const borrower = await borrowerService.getBorrower(req.societyId, borrowerId);
-  await auditView(req.user.id, req.societyId, 'FINANCE_BORROWER_VIEWED', 'non_member_borrower', borrowerId);
   res.json(borrower);
 };
 export const createBorrower: RequestHandler = async (req, res) => { res.status(201).json(await borrowerService.createBorrower(req.societyId, req.user.id, borrowerSchema.parse(req.body))); };
@@ -90,7 +80,6 @@ export const financialReport: RequestHandler = async (req, res) => {
   const kind = reportKindSchema.parse(req.params.kind);
   const query = reportQuerySchema.parse(req.query);
   const report = await reports.financialReport(req.societyId, kind, query);
-  if (query.scope === 'full') await auditView(req.user.id, req.societyId, 'FINANCE_REPORT_EXPORTED', 'finance_report', kind);
   res.set('Cache-Control', 'no-store').json(report);
 };
 export const ownFinancialReport: RequestHandler = async (req, res) => {
@@ -98,7 +87,6 @@ export const ownFinancialReport: RequestHandler = async (req, res) => {
   const kind = ownReportKindSchema.parse(req.params.kind);
   const query = ownReportQuerySchema.parse(req.query);
   const report = await reports.financialReport(req.societyId, kind, { ...query, memberId: req.user.memberId });
-  if (query.scope === 'full') await auditView(req.user.id, req.societyId, 'FINANCE_REPORT_EXPORTED', 'finance_report', `me:${kind}`);
   res.set('Cache-Control', 'no-store').json(report);
 };
 

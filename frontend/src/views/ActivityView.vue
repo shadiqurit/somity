@@ -22,25 +22,23 @@ interface Activity {
 const labels: Record<string, string> = {
   AUTH_LOGIN: 'Signed in', AUTH_LOGOUT: 'Signed out', PASSWORD_CHANGED: 'Changed password', PASSWORD_RESET: 'Reset password',
   SUPERADMIN_SEEDED: 'Initialized Super Admin', ADMIN_CREATED: 'Created an admin account', STAFF_CREATED: 'Created a staff account',
-  SOCIETY_CREATED: 'Created a society', SOCIETY_UPDATED: 'Updated a society', SOCIETY_SELECTED: 'Switched society',
+  SOCIETY_CREATED: 'Created a society', SOCIETY_UPDATED: 'Updated a society',
   MEMBER_CREATED: 'Added a member', MEMBER_UPDATED: 'Updated a member', MEMBER_CLOSED: 'Closed a membership',
   MEMBER_SETTLEMENT_STARTED: 'Started final settlement', MEMBER_SETTLEMENT_COMPLETED: 'Completed final settlement',
   MEMBER_SETTLEMENT_CANCELLED: 'Cancelled final settlement',
-  MEMBER_DUES_STATEMENT_VIEWED: 'Viewed dues and receivables',
-  MEMBER_ARCHIVED: 'Archived a member', MEMBER_LOGIN_CREATED: 'Created a member login', MEMBER_PROFILE_VIEWED: 'Viewed a member profile',
+  MEMBER_ARCHIVED: 'Archived a member', MEMBER_LOGIN_CREATED: 'Created a member login',
   MEMBER_PHOTO_UPLOADED: 'Uploaded a member photo', MEMBER_PHOTO_REMOVED: 'Removed a member photo',
   FINANCE_ACCOUNT_CREATED: 'Created a financial account', FINANCE_POLICY_UPDATED: 'Updated the approval policy',
   FINANCE_REQUESTED: 'Submitted a transaction', FINANCE_APPROVED: 'Approved a transaction', FINANCE_REJECTED: 'Rejected a transaction',
   FINANCE_POSTED: 'Posted a transaction', FINANCE_CANCELLED: 'Cancelled a transaction', FINANCE_DELETED: 'Deleted a rejected transaction',
-  FINANCE_REVERSAL_REQUESTED: 'Requested a reversal', FINANCE_TRANSACTION_VIEWED: 'Viewed a transaction',
-  FINANCE_STATEMENT_VIEWED: 'Viewed a savings statement', FINANCE_LEDGER_VIEWED: 'Viewed the society ledger',
-  FINANCE_LOAN_VIEWED: 'Viewed a loan', FINANCE_LOANS_VIEWED: 'Viewed own loan history', FINANCE_INVESTMENT_VIEWED: 'Viewed an investment',
+  FINANCE_REVERSAL_REQUESTED: 'Requested a reversal',
+  FINANCE_BORROWER_CREATED: 'Added a borrower', FINANCE_BORROWER_UPDATED: 'Updated a borrower',
   NOTE_CREATED: 'Added a note', NOTE_UPDATED: 'Updated a note', NOTE_DELETED: 'Deleted a note',
 };
 const roles: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin', ADMIN: 'Admin', SOCIETY_ADMIN: 'Society Admin', ACCOUNTANT: 'Accountant', APPROVER: 'Approver', MEMBER: 'Member',
 };
-const targets: Record<string, string> = { member: 'Member', transaction: 'Transaction', user: 'User', society: 'Society', account: 'Account', finance_policy: 'Approval policy', ledger: 'Society ledger', loan: 'Loan', investment: 'Investment', note: 'Note' };
+const targets: Record<string, string> = { member: 'Member', transaction: 'Transaction', user: 'User', society: 'Society', account: 'Account', finance_policy: 'Approval policy', investment: 'Investment', non_member_borrower: 'Borrower', note: 'Note' };
 const actionOptions = [{ value: '', label: 'All actions' }, ...Object.entries(labels).map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label))];
 const roleOptions = [{ value: '', label: 'All roles' }, ...Object.entries(roles).map(([value, label]) => ({ value, label }))];
 const columns = [{ key: 'createdAt', label: 'Date and time' }, { key: 'action', label: 'Action' }, { key: 'actor', label: 'Performed by' }, { key: 'target', label: 'Record' }, { key: 'society', label: 'Society' }];

@@ -679,9 +679,8 @@ describe('Phase 2 financial workflow', () => {
     const personal = await request(app).get('/api/activity/me').set(member).expect(200);
     expect(personal.body.items).toEqual(expect.arrayContaining([
       expect.objectContaining({ action: 'AUTH_LOGIN', actorRole: 'MEMBER' }),
-      expect.objectContaining({ action: 'MEMBER_PROFILE_VIEWED', actorRole: 'MEMBER', entityId: memberId }),
-      expect.objectContaining({ action: 'FINANCE_STATEMENT_VIEWED', actorRole: 'MEMBER' }),
     ]));
+    expect(personal.body.items.some((item: { action: string }) => item.action.endsWith('_VIEWED') || item.action === 'SOCIETY_SELECTED')).toBe(false);
     expect(personal.body.items.every((item: { actor: { id: string } }) => item.actor.id === userIds.MEMBER)).toBe(true);
     expect(personal.body.items[0]).not.toHaveProperty('changes');
     await request(app).get('/api/activity').set(member).expect(403);
@@ -695,7 +694,7 @@ describe('Phase 2 financial workflow', () => {
       .query({ actorRole: 'APPROVER', action: 'FINANCE_APPROVED', after: decisions.body.nextCursor }).expect(200);
     expect(older.body.items.map((item: { id: string }) => item.id)).not.toContain(decisions.body.items[0].id);
     await request(app).get('/api/activity/me').set(member).query({ after: decisions.body.nextCursor }).expect(422);
-    const other = await request(app).get('/api/activity').set(headers('ADMIN', otherSocietyId)).query({ action: 'MEMBER_PROFILE_VIEWED' }).expect(200);
+    const other = await request(app).get('/api/activity').set(headers('ADMIN', otherSocietyId)).query({ action: 'FINANCE_APPROVED' }).expect(200);
     expect(other.body.items).toEqual([]);
 
     const session = await request(app).post('/api/auth/login').set('Origin', origin)

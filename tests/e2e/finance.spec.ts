@@ -353,7 +353,7 @@ test('cash account, deposit request, approval, ledger and private member stateme
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:testInfo.outputPath('member-loans-mobile.png'),fullPage:true,animations:'disabled'});
   await page.getByRole('button', { name: 'Open navigation' }).click();
   await page.getByRole('link', { name: 'Activity log', exact: true }).click();
-  await expect(page.getByRole('cell', { name: 'Viewed a member profile', exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'Signed in', exact: true }).first()).toBeVisible();
   await expect(page.getByLabel('Activity scope')).toHaveCount(0);
   await expect(page.getByRole('cell', { name: /Browser APPROVER/ })).toHaveCount(0);
   await approverPage.goto('/activity');

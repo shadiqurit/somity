@@ -14,10 +14,6 @@ export function audit(tx: Prisma.TransactionClient, actorId: string | null, acti
   return tx.auditLog.create({ data: { actorId, actorRole, societyId, action, entityType, entityId, ...(changes ? { changes } : {}) } });
 }
 
-export function auditView(actorId: string, societyId: string, action: string, entityType: string, entityId: string) {
-  return audit(db, actorId, action, entityType, entityId, undefined, societyId);
-}
-
 export async function auditPageFilter(where: Prisma.AuditLogWhereInput, after?: string): Promise<Prisma.AuditLogWhereInput> {
   if (!after) return where;
   const cursor = await db.auditLog.findFirst({ where: { AND: [where, { id: after }] }, select: { id: true, createdAt: true } });

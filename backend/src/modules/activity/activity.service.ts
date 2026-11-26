@@ -4,9 +4,24 @@ import { auditPageFilter } from '../../services/audit.js';
 
 type Filters = { after?: string; limit: number; action?: string; actorRole?: string };
 
+const EXCLUDED_ACTIONS = [
+  'SOCIETY_SELECTED',
+  'MEMBER_PROFILE_VIEWED',
+  'MEMBER_DUES_STATEMENT_VIEWED',
+  'FINANCE_TRANSACTION_VIEWED',
+  'FINANCE_STATEMENT_VIEWED',
+  'FINANCE_LEDGER_VIEWED',
+  'FINANCE_LOAN_VIEWED',
+  'FINANCE_LOANS_VIEWED',
+  'FINANCE_INVESTMENT_VIEWED',
+  'FINANCE_BORROWER_VIEWED',
+  'FINANCE_REPORT_EXPORTED',
+];
+
 export async function list(scope: Prisma.AuditLogWhereInput, { after, limit, action, actorRole }: Filters) {
+  const actionFilter: Prisma.AuditLogWhereInput[] = [{ action: { notIn: EXCLUDED_ACTIONS } }, ...(action ? [{ action }] : [])];
   const events = await db.auditLog.findMany({
-    where: await auditPageFilter({ ...scope, action, actorRole }, after),
+    where: await auditPageFilter({ ...scope, actorRole, AND: actionFilter }, after),
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: limit + 1,
     select: {
@@ -23,13 +38,15 @@ export async function list(scope: Prisma.AuditLogWhereInput, { after, limit, act
   const accountIds = ids('account');
   const investmentIds = ids('investment');
   const noteIds = ids('note');
-  const [members, transactions, users, accounts, investments, notes] = await Promise.all([
+  const borrowerIds = ids('non_member_borrower');
+  const [members, transactions, users, accounts, investments, notes, borrowers] = await Promise.all([
     memberIds.length ? db.member.findMany({ where: { id: { in: memberIds } }, select: { id: true, societyId: true, fullName: true, memberNo: true } }) : [],
     transactionIds.length ? db.financialTransaction.findMany({ where: { id: { in: transactionIds } }, select: { id: true, societyId: true, transactionNo: true } }) : [],
     userIds.length ? db.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } }) : [],
     accountIds.length ? db.ledgerAccount.findMany({ where: { id: { in: accountIds } }, select: { id: true, societyId: true, name: true } }) : [],
     investmentIds.length ? db.investment.findMany({ where: { id: { in: investmentIds } }, select: { id: true, societyId: true, title: true } }) : [],
     noteIds.length ? db.note.findMany({ where: { id: { in: noteIds } }, select: { id: true, societyId: true, title: true } }) : [],
+    borrowerIds.length ? db.nonMemberBorrower.findMany({ where: { id: { in: borrowerIds } }, select: { id: true, societyId: true, fullName: true, borrowerNo: true } }) : [],
   ]);
   const labels = new Map<string, string>([
     ...members.map(row => [`member/${row.societyId}/${row.id}`, `${row.fullName} · ${row.memberNo}`] as const),
@@ -38,6 +55,7 @@ export async function list(scope: Prisma.AuditLogWhereInput, { after, limit, act
     ...accounts.map(row => [`account/${row.societyId}/${row.id}`, row.name] as const),
     ...investments.map(row => [`investment/${row.societyId}/${row.id}`, row.title] as const),
     ...notes.map(row => [`note/${row.societyId}/${row.id}`, row.title] as const),
+    ...borrowers.map(row => [`non_member_borrower/${row.societyId}/${row.id}`, `${row.fullName} · ${row.borrowerNo}`] as const),
   ]);
   return {
     items: page.map(event => {

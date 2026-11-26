@@ -1,7 +1,6 @@
 import type { Request, Response } from 'express';
 import { env } from '../../config/env.js';
 import { AppError } from '../../utils/errors.js';
-import { auditView } from '../../services/audit.js';
 import * as service from './auth.service.js';
 import { loginSchema, changePasswordSchema } from './auth.validator.js';
 const cookieOptions = { httpOnly: true, secure: env.NODE_ENV === 'production', sameSite: 'strict' as const, path: '/api/auth', maxAge: 7 * 86400000 };
@@ -31,6 +30,5 @@ export async function changePassword(req: Request, res: Response) {
   res.clearCookie('somity_refresh', cookieOptions).status(204).end();
 }
 export async function selectSociety(req: Request, res: Response) {
-  await auditView(req.user.id, req.societyId, 'SOCIETY_SELECTED', 'society', req.societyId);
   res.json(req.user);
 }

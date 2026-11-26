@@ -1,7 +1,6 @@
 import type { Request, Response } from 'express';
 import { AppError } from '../../utils/errors.js';
 import { canViewMember } from '../../middleware/auth.js';
-import { auditView } from '../../services/audit.js';
 import { submitSettlementPayment } from '../finance/finance.service.js';
 import { memberDuesStatement } from '../finance/finance.member-statement.js';
 import { idSchema, keySchema, settlementPaymentSchema, settlementReferenceSchema, statementListSchema } from '../finance/finance.validator.js';
@@ -10,7 +9,6 @@ import { archiveSchema, listSchema, memberLoginSchema, memberSchema, updateMembe
 export async function list(req: Request, res: Response) { res.json(await service.list(listSchema.parse(req.query), req.societyId)); }
 async function viewProfile(req: Request, res: Response, id: string) {
   const member = await service.get(id, req.societyId);
-  await auditView(req.user.id, req.societyId, 'MEMBER_PROFILE_VIEWED', 'member', id);
   res.json(member);
 }
 export async function get(req: Request, res: Response) {
@@ -40,7 +38,6 @@ export async function getSettlement(req: Request, res: Response) {
 export async function getSettlementStatement(req: Request, res: Response) {
   const memberId = idSchema.parse(req.params.id);
   const statement = await memberDuesStatement(req.societyId, memberId, statementListSchema.parse(req.query));
-  await auditView(req.user.id, req.societyId, 'MEMBER_DUES_STATEMENT_VIEWED', 'member', memberId);
   res.json(statement);
 }
 
