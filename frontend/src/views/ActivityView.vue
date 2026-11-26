@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { Download } from 'lucide-vue-next';
 import { useAuthStore } from '../stores/auth';
 import { useLocale } from '../composables/useLocale';
 import { api, errorMessage } from '../services/api';
+import { todayDhaka } from '../modules/finance/types';
 import AppButton from '../components/ui/AppButton.vue';
 import AppSelect from '../components/ui/AppSelect.vue';
 import AppTable from '../components/tables/AppTable.vue';
@@ -58,8 +60,71 @@ const rows = ref<Activity[]>([]);
 const cursors = ref<string[]>([]);
 const nextCursor = ref<string | null>(null);
 const loading = ref(false);
+const downloading = ref(false);
 const error = ref('');
 let sequence = 0;
+let exportRequest: AbortController | undefined;
+
+function csvCell(value: string) {
+  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return `"${safe.replaceAll('"', '""')}"`;
+}
+
+function formatRecord(row: Activity) {
+  if (row.targetLabel) return row.targetLabel;
+  const base = targets[row.entityType] ?? row.entityType;
+  return ['member', 'transaction'].includes(row.entityType) ? `${base} (${row.entityId})` : base;
+}
+
+async function downloadCsv() {
+  if (downloading.value) return;
+  exportRequest?.abort();
+  const request = new AbortController();
+  exportRequest = request;
+  downloading.value = true;
+  error.value = '';
+  try {
+    const query = applied.value;
+    const all: Activity[] = [];
+    let after: string | undefined;
+    for (let page = 0; page < 100; page++) {
+      const { data } = await api.get<{ items: Activity[]; nextCursor: string | null }>(query.scope, {
+        params: { after, limit: 100, action: query.action || undefined, actorRole: query.actorRole || undefined },
+        signal: request.signal,
+      });
+      all.push(...data.items);
+      if (!data.nextCursor) break;
+      after = data.nextCursor;
+    }
+    const header = ['Date and time', 'Action', 'Performed by', 'Role', 'Record', 'Society'];
+    const lines = [
+      header.map(csvCell).join(','),
+      ...all.map(row => [
+        timestamp.format(new Date(row.createdAt)),
+        labels[row.action] ?? row.action,
+        row.actor?.name ?? '',
+        row.actorRole ? roles[row.actorRole] ?? row.actorRole : '',
+        formatRecord(row),
+        row.society?.name ?? 'Account or platform',
+      ].map(csvCell).join(',')),
+    ];
+    const scopeSlug = query.scope === '/activity/me' ? 'my' : query.scope === '/activity/platform' ? 'platform' : 'society';
+    const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `activity-log-${scopeSlug}-${todayDhaka()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    if (!request.signal.aborted) error.value = errorMessage(e);
+  } finally {
+    if (exportRequest === request) exportRequest = undefined;
+    if (!request.signal.aborted) downloading.value = false;
+  }
+}
 
 async function load(history = cursors.value, query = applied.value) {
   const current = ++sequence;
@@ -83,10 +148,16 @@ function applyFilters() {
 }
 
 onMounted(() => load());
+onBeforeUnmount(() => exportRequest?.abort());
 </script>
 
 <template>
-  <div class="page-heading"><h1>{{ t('Activity log') }}<span class="heading-dot">.</span></h1></div>
+  <div class="page-heading">
+    <h1>{{ t('Activity log') }}<span class="heading-dot">.</span></h1>
+    <AppButton variant="secondary" :loading="downloading" :disabled="loading || downloading || !rows.length" @click="downloadCsv">
+      <Download :size="16" aria-hidden="true" /> {{ t('Download CSV') }}
+    </AppButton>
+  </div>
   <section class="panel directory">
     <form class="finance-filters" @submit.prevent="applyFilters">
       <AppSelect v-if="scopes.length > 1" v-model="scope" label="Activity scope" :options="scopes" />

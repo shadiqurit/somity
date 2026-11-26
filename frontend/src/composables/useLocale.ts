@@ -113,6 +113,7 @@ Object.assign(dictionary, {
   'All transactions': 'সব লেনদেন',
   Savings: 'সঞ্চয়',
   'Download PDF': 'পিডিএফ ডাউনলোড',
+  'Download CSV': 'সিএসভি ডাউনলোড',
   'Overall summary': 'সার্বিক সারসংক্ষেপ',
   'Closing cash & bank': 'শেষের নগদ ও ব্যাংক',
   'Closing savings': 'শেষের সঞ্চয়',
